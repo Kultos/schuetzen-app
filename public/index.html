@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Schützen-Wettkampf Auswertung</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img id="clubLogo" src="/logo.png" alt="" onerror="this.style.display='none'">
+      <h1>Schützen-Wettkampf Auswertung</h1>
+    </div>
+    <nav class="tabs">
+      <button data-tab="shooters" class="tab active">Schützen</button>
+      <button data-tab="disciplines" class="tab">Disziplinen</button>
+      <button data-tab="results" class="tab">Ergebnisse erfassen</button>
+      <button data-tab="rankings" class="tab">Ranglisten</button>
+      <button data-tab="import" class="tab">Excel/CSV-Import</button>
+      <button data-tab="season" class="tab">Saison &amp; Netzwerk</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- SCHÜTZEN -->
+    <section id="tab-shooters" class="panel active">
+      <h2>Schützen</h2>
+      <form id="shooterForm" class="inline-form">
+        <input type="text" id="shooterName" placeholder="Name" required>
+        <select id="shooterGender">
+          <option value="m">männlich</option>
+          <option value="w">weiblich</option>
+        </select>
+        <button type="submit">Hinzufügen</button>
+      </form>
+      <table class="data-table">
+        <thead><tr><th>Name</th><th>Geschlecht</th><th></th></tr></thead>
+        <tbody id="shooterTableBody"></tbody>
+      </table>
+    </section>
+
+    <!-- DISZIPLINEN -->
+    <section id="tab-disciplines" class="panel">
+      <h2>Disziplinen</h2>
+      <form id="disciplineForm" class="inline-form">
+        <input type="text" id="disciplineName" placeholder="Name der Disziplin" required>
+        <button type="submit">Hinzufügen</button>
+      </form>
+      <table class="data-table">
+        <thead><tr><th>Name</th><th></th></tr></thead>
+        <tbody id="disciplineTableBody"></tbody>
+      </table>
+    </section>
+
+    <!-- ERGEBNISSE ERFASSEN -->
+    <section id="tab-results" class="panel">
+      <h2>Ergebnisse erfassen</h2>
+      <div class="inline-form">
+        <select id="resultShooterSelect"></select>
+        <select id="resultDisciplineSelect"></select>
+      </div>
+      <form id="resultForm" class="inline-form">
+        <input type="number" step="0.1" id="resultPoints" placeholder="Punkte" required>
+        <button type="submit">Durchgang hinzufügen</button>
+      </form>
+      <table class="data-table">
+        <thead><tr><th>Durchgang</th><th>Punkte</th><th></th></tr></thead>
+        <tbody id="resultTableBody"></tbody>
+      </table>
+      <p class="hint">Hinweis: Für die Rangliste zählt automatisch der beste Durchgang; bei Gleichstand entscheidet der nächstbeste.</p>
+    </section>
+
+    <!-- RANGLISTEN -->
+    <section id="tab-rankings" class="panel">
+      <h2>Ranglisten</h2>
+      <div class="inline-form no-print">
+        <select id="rankingDisciplineSelect"></select>
+        <button id="printRankingBtn">Drucken / Als PDF</button>
+      </div>
+      <div id="rankingPrintArea">
+        <div class="print-header">
+          <img id="printLogo" src="/logo.png" alt="" onerror="this.style.display='none'">
+          <div>
+            <h2 id="printTitle">Rangliste</h2>
+            <div id="printDate"></div>
+          </div>
+        </div>
+        <table class="data-table ranking-table">
+          <thead><tr><th>Platz</th><th>Name</th><th>Geschlecht</th><th>Bestes Ergebnis</th><th>Alle Durchgänge</th></tr></thead>
+          <tbody id="rankingTableBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- IMPORT -->
+    <section id="tab-import" class="panel">
+      <h2>Excel/CSV-Import</h2>
+      <p class="hint">Erwartete Spalten: <b>Name</b>, <b>Geschlecht</b> (m/w), <b>Disziplin</b>, <b>Durchgang</b> (optional), <b>Punkte</b>.</p>
+      <input type="file" id="importFile" accept=".csv,.xlsx,.xls,.xlsm">
+      <div id="importPreviewWrap" style="display:none">
+        <h3>Spalten zuordnen</h3>
+        <div class="mapping-grid" id="mappingGrid"></div>
+        <button id="importSubmitBtn">Import starten</button>
+      </div>
+      <pre id="importResult"></pre>
+    </section>
+
+    <!-- SAISON & NETZWERK -->
+    <section id="tab-season" class="panel">
+      <h2>Saison &amp; Netzwerk</h2>
+      <div class="card">
+        <h3>Zugriff im lokalen Netzwerk</h3>
+        <p>Andere Geräte (z.B. Smartphone) können über folgende Adresse zugreifen, wenn sie im selben WLAN sind:</p>
+        <ul id="lanIpList"></ul>
+        <p class="hint">Falls der Zugriff nicht funktioniert: Windows-Firewall muss den Port freigeben (siehe Anleitung/README).</p>
+      </div>
+      <div class="card">
+        <h3>Backup</h3>
+        <button id="exportBtn">Aktuelle Saison exportieren (Download)</button>
+      </div>
+      <div class="card">
+        <h3>Neue Saison starten</h3>
+        <p class="hint">Vor dem Zurücksetzen wird automatisch ein Archiv der aktuellen Saison gespeichert.</p>
+        <input type="text" id="seasonLabel" placeholder="Bezeichnung (z.B. Saison-2026)">
+        <button id="resetSeasonBtn" class="danger">Neue Saison starten (setzt alle Daten zurück)</button>
+      </div>
+      <div class="card">
+        <h3>Vorhandene Archive</h3>
+        <ul id="archiveList"></ul>
+      </div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
