@@ -104,6 +104,9 @@ button.link.danger-text { color: var(--danger); }
 
 .hint { color: #55665e; font-size: 0.85rem; }
 
+.row-actions button { margin-right: 0.4rem; }
+.row-actions button:last-child { margin-right: 0; }
+
 .card {
   border: 1px solid var(--border);
   border-radius: 8px;

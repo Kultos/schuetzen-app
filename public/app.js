@@ -44,29 +44,73 @@ document.querySelectorAll('.tab').forEach((btn) => {
 
 // ---------------- Shooters ----------------
 
+let editingShooterId = null;
+
 async function loadShooters() {
   state.shooters = await api('/api/shooters');
   const body = document.getElementById('shooterTableBody');
   body.innerHTML = '';
   for (const s of state.shooters) {
-    body.appendChild(
-      el('tr', {}, [
-        el('td', { text: s.name }),
-        el('td', { text: s.gender === 'w' ? 'weiblich' : 'männlich' }),
-        el('td', {}, [
-          el('button', {
-            class: 'link danger-text',
-            text: 'Löschen',
-            onclick: async () => {
-              if (!confirm(`"${s.name}" wirklich löschen? Auch alle Ergebnisse dieses Schützen werden entfernt.`)) return;
-              await api(`/api/shooters/${s.id}`, { method: 'DELETE' });
-              loadShooters();
-            },
-          }),
-        ]),
-      ])
-    );
+    body.appendChild(s.id === editingShooterId ? renderShooterEditRow(s) : renderShooterRow(s));
   }
+}
+
+function renderShooterRow(s) {
+  return el('tr', {}, [
+    el('td', { text: s.name }),
+    el('td', { text: s.gender === 'w' ? 'weiblich' : 'männlich' }),
+    el('td', { class: 'row-actions' }, [
+      el('button', {
+        class: 'link',
+        text: 'Bearbeiten',
+        onclick: () => {
+          editingShooterId = s.id;
+          loadShooters();
+        },
+      }),
+      el('button', {
+        class: 'link danger-text',
+        text: 'Löschen',
+        onclick: async () => {
+          if (!confirm(`"${s.name}" wirklich löschen? Auch alle Ergebnisse dieses Schützen werden entfernt.`)) return;
+          await api(`/api/shooters/${s.id}`, { method: 'DELETE' });
+          loadShooters();
+        },
+      }),
+    ]),
+  ]);
+}
+
+function renderShooterEditRow(s) {
+  const nameInput = el('input', { type: 'text', value: s.name });
+  nameInput.value = s.name;
+  const genderSelect = el('select', {}, [
+    el('option', { value: 'm', text: 'männlich' }),
+    el('option', { value: 'w', text: 'weiblich' }),
+  ]);
+  genderSelect.value = s.gender;
+
+  const save = async () => {
+    const name = nameInput.value.trim();
+    if (!name) { alert('Name darf nicht leer sein.'); return; }
+    await api(`/api/shooters/${s.id}`, { method: 'PUT', body: JSON.stringify({ name, gender: genderSelect.value }) });
+    editingShooterId = null;
+    loadShooters();
+  };
+  const cancel = () => {
+    editingShooterId = null;
+    loadShooters();
+  };
+  nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') cancel(); });
+
+  return el('tr', {}, [
+    el('td', {}, [nameInput]),
+    el('td', {}, [genderSelect]),
+    el('td', { class: 'row-actions' }, [
+      el('button', { text: 'Speichern', onclick: save }),
+      el('button', { class: 'link', text: 'Abbrechen', onclick: cancel }),
+    ]),
+  ]);
 }
 
 document.getElementById('shooterForm').addEventListener('submit', async (e) => {
@@ -81,28 +125,66 @@ document.getElementById('shooterForm').addEventListener('submit', async (e) => {
 
 // ---------------- Disciplines ----------------
 
+let editingDisciplineId = null;
+
 async function loadDisciplines() {
   state.disciplines = await api('/api/disciplines');
   const body = document.getElementById('disciplineTableBody');
   body.innerHTML = '';
   for (const d of state.disciplines) {
-    body.appendChild(
-      el('tr', {}, [
-        el('td', { text: d.name }),
-        el('td', {}, [
-          el('button', {
-            class: 'link danger-text',
-            text: 'Löschen',
-            onclick: async () => {
-              if (!confirm(`Disziplin "${d.name}" wirklich löschen? Auch alle Ergebnisse dieser Disziplin werden entfernt.`)) return;
-              await api(`/api/disciplines/${d.id}`, { method: 'DELETE' });
-              loadDisciplines();
-            },
-          }),
-        ]),
-      ])
-    );
+    body.appendChild(d.id === editingDisciplineId ? renderDisciplineEditRow(d) : renderDisciplineRow(d));
   }
+}
+
+function renderDisciplineRow(d) {
+  return el('tr', {}, [
+    el('td', { text: d.name }),
+    el('td', { class: 'row-actions' }, [
+      el('button', {
+        class: 'link',
+        text: 'Bearbeiten',
+        onclick: () => {
+          editingDisciplineId = d.id;
+          loadDisciplines();
+        },
+      }),
+      el('button', {
+        class: 'link danger-text',
+        text: 'Löschen',
+        onclick: async () => {
+          if (!confirm(`Disziplin "${d.name}" wirklich löschen? Auch alle Ergebnisse dieser Disziplin werden entfernt.`)) return;
+          await api(`/api/disciplines/${d.id}`, { method: 'DELETE' });
+          loadDisciplines();
+        },
+      }),
+    ]),
+  ]);
+}
+
+function renderDisciplineEditRow(d) {
+  const nameInput = el('input', { type: 'text' });
+  nameInput.value = d.name;
+
+  const save = async () => {
+    const name = nameInput.value.trim();
+    if (!name) { alert('Name darf nicht leer sein.'); return; }
+    await api(`/api/disciplines/${d.id}`, { method: 'PUT', body: JSON.stringify({ name }) });
+    editingDisciplineId = null;
+    loadDisciplines();
+  };
+  const cancel = () => {
+    editingDisciplineId = null;
+    loadDisciplines();
+  };
+  nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') cancel(); });
+
+  return el('tr', {}, [
+    el('td', {}, [nameInput]),
+    el('td', { class: 'row-actions' }, [
+      el('button', { text: 'Speichern', onclick: save }),
+      el('button', { class: 'link', text: 'Abbrechen', onclick: cancel }),
+    ]),
+  ]);
 }
 
 document.getElementById('disciplineForm').addEventListener('submit', async (e) => {
