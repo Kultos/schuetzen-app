@@ -29,7 +29,10 @@ Im LAN:  http://192.168.x.x:3000
 - **Disziplinen**: Disziplinen für den aktuellen Wettkampf anlegen (beliebig viele, jederzeit erweiterbar).
 - **Ergebnisse erfassen**: Schütze + Disziplin auswählen, dann Durchgänge (Punktzahlen) nacheinander eintragen.
 - **Ranglisten**: Disziplin auswählen → Rangliste wird automatisch berechnet (bester Durchgang zählt, bei Gleichstand entscheidet der nächstbeste Durchgang). Über "Drucken / Als PDF" lässt sich die Liste ausdrucken oder als PDF speichern (im Druckdialog des Browsers "Als PDF speichern" wählen).
-- **Excel/CSV-Import**: Bestehende Excel-Tabellen (.xlsx) oder CSV-Dateien importieren. Nach Auswahl der Datei können die Spalten (Name, Geschlecht, Disziplin, Durchgang, Punkte) zugeordnet werden. *Hinweis: Für den Excel-Import (.xlsx) ist einmalig eine Internetverbindung nötig, um eine kleine Hilfsbibliothek zu laden. CSV-Dateien funktionieren immer komplett offline.*
+- **Excel/CSV-Import**: Bestehende Excel-Tabellen (.xlsx) oder CSV-Dateien importieren.
+  - **Vereins-Vorlage "Startmeldung"** (wie bisher verwendet, mit "Beste Serie"/"Folgeserien" je Disziplin): wird automatisch erkannt. Es erscheint eine Zusammenfassung (erkannte Disziplinen, Anzahl Schützen/Ergebnisse) – einfach auf "Import starten" klicken. Schützen ohne bisheriges Ergebnis werden dabei übersprungen und müssen danach manuell unter "Schützen" ergänzt werden.
+  - **Andere/einfache Listen** (eine Zeile = ein Ergebnis): Nach Dateiauswahl erscheint stattdessen die Spalten-Zuordnung (Name, Geschlecht, Disziplin, Durchgang, Punkte).
+  - *Hinweis: Für den Excel-Import (.xlsx/.xlsm) ist einmalig eine Internetverbindung nötig, um eine kleine Hilfsbibliothek zu laden. CSV-Dateien funktionieren immer komplett offline.*
 - **Saison & Netzwerk**: Zeigt die Netzwerkadresse für andere Geräte, ermöglicht den Export der aktuellen Daten als Sicherung sowie das Starten einer neuen Saison (siehe unten).
 
 ## Neue Saison starten

@@ -96,8 +96,19 @@
     <!-- IMPORT -->
     <section id="tab-import" class="panel">
       <h2>Excel/CSV-Import</h2>
-      <p class="hint">Erwartete Spalten: <b>Name</b>, <b>Geschlecht</b> (m/w), <b>Disziplin</b>, <b>Durchgang</b> (optional), <b>Punkte</b>.</p>
+      <p class="hint">Vereins-Vorlagen mit einem "Startmeldung"-Tabellenblatt (Name, Geschlecht, "Beste Serie"/"Folgeserien" je Disziplin) werden automatisch erkannt. Alternativ: einfache Liste mit Spalten <b>Name</b>, <b>Geschlecht</b> (m/w), <b>Disziplin</b>, <b>Durchgang</b> (optional), <b>Punkte</b>.</p>
       <input type="file" id="importFile" accept=".csv,.xlsx,.xls,.xlsm">
+
+      <div id="importDetectedWrap" style="display:none">
+        <div class="card">
+          <h3>Vorlage erkannt: "<span id="detectedSheetName"></span>"</h3>
+          <p id="detectedSummary"></p>
+          <p class="hint" id="detectedNote"></p>
+          <button id="importDetectedBtn">Import starten</button>
+          <button id="switchToManualBtn" class="link">Stattdessen Spalten manuell zuordnen</button>
+        </div>
+      </div>
+
       <div id="importPreviewWrap" style="display:none">
         <h3>Spalten zuordnen</h3>
         <div class="mapping-grid" id="mappingGrid"></div>

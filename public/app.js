@@ -289,8 +289,9 @@ document.getElementById('printRankingBtn').addEventListener('click', () => windo
 
 // ---------------- Import ----------------
 
-let importRows = []; // array of objects keyed by detected column header
+let importRows = []; // array of objects keyed by detected column header (manueller Modus)
 let importHeaders = [];
+let detectedExtraction = null; // { rows, disciplineNames, shooterCount } vom Startmeldung-Auto-Import
 
 function parseCSV(text) {
   // Trennzeichen erkennen (Komma, Semikolon, Tab)
@@ -313,20 +314,167 @@ function loadSheetJS() {
   });
 }
 
+// ---- Automatische Erkennung des "Startmeldung"-Vorlagenformats ----
+// Erwartet: eine Kopfzeile mit "geschlecht", "Name..." und mind. einer Spalte "Beste Serie"
+// (optional gefolgt von einer Spalte "Folgeserien"). Der Disziplinname steht als
+// zusammengeführte Zelle einige Zeilen darüber in derselben Spalte.
+
+function normalizeHeaderCell(v) {
+  return String(v ?? '').trim().toLowerCase();
+}
+
+function isPureNumber(v) {
+  const s = String(v ?? '').trim();
+  if (s === '') return false;
+  return !Number.isNaN(parseFloat(s.replace(',', '.'))) && /^-?[\d.,]+$/.test(s);
+}
+
+// Findet das am naechsten liegende Merge, das Spalte `col` einschliesst und
+// oberhalb von `headerRowIdx` beginnt (0-indexed, wie SheetJS "!merges").
+function findMergedLabel(rowsAsArrays, merges, col, headerRowIdx) {
+  if (!merges || !merges.length) return '';
+  let best = null;
+  for (const m of merges) {
+    if (m.s.r >= headerRowIdx) continue;
+    if (col < m.s.c || col > m.e.c) continue;
+    if (!best || m.s.r > best.s.r) best = m;
+  }
+  if (!best) return '';
+  const row = rowsAsArrays[best.s.r] || [];
+  return String(row[best.s.c] ?? '').trim();
+}
+
+// Fallback ohne Merge-Info: naechste nicht-leere UND nicht rein-numerische Zelle
+// oberhalb in derselben Spalte (rein numerische Zwischenzeilen wie Punktwerte werden uebersprungen).
+function findLabelByScanning(rowsAsArrays, col, headerRowIdx) {
+  for (let rr = headerRowIdx - 1; rr >= 0; rr--) {
+    const val = rowsAsArrays[rr] && rowsAsArrays[rr][col];
+    if (val === undefined || val === null || String(val).trim() === '') continue;
+    if (isPureNumber(val)) continue;
+    return String(val).trim();
+  }
+  return '';
+}
+
+function detectStartmeldung(rowsAsArrays, merges) {
+  for (let r = 0; r < rowsAsArrays.length; r++) {
+    const row = rowsAsArrays[r] || [];
+    const normalized = row.map(normalizeHeaderCell);
+    const genderColIdx = normalized.indexOf('geschlecht');
+    const nameColIdx = normalized.findIndex((h) => h.startsWith('name'));
+    const hasBesteSerie = normalized.includes('beste serie');
+    if (genderColIdx === -1 || nameColIdx === -1 || !hasBesteSerie) continue;
+
+    const groups = [];
+    for (let c = 0; c < normalized.length; c++) {
+      if (normalized[c] !== 'beste serie') continue;
+      let label = findMergedLabel(rowsAsArrays, merges, c, r);
+      if (!label) label = findLabelByScanning(rowsAsArrays, c, r);
+      if (!label) label = `Disziplin (Spalte ${c + 1})`;
+      const folgeCol = normalized[c + 1] === 'folgeserien' ? c + 1 : null;
+      groups.push({ disciplineName: label, bestCol: c, folgeCol });
+    }
+    if (groups.length > 0) {
+      return { headerRowIdx: r, nameCol: nameColIdx, genderCol: genderColIdx, groups };
+    }
+  }
+  return null;
+}
+
+function normalizeShooterName(raw) {
+  let s = String(raw ?? '').trim().replace(/\s+/g, ' ');
+  if (!s) return s;
+  if (s.includes(',')) return s.replace(/\s*,\s*/, ', ');
+  const m = s.match(/^([^.\s]+)\.(\S.*)$/); // z.B. "Nachname.Vorname" -> "Nachname, Vorname"
+  if (m) return `${m[1]}, ${m[2]}`;
+  return s;
+}
+
+function normalizeGenderCell(raw) {
+  const g = String(raw ?? '').trim().toLowerCase();
+  return g.startsWith('w') || g.startsWith('f') ? 'w' : 'm';
+}
+
+function parseNumericToken(tok) {
+  const n = parseFloat(String(tok).replace(',', '.'));
+  return Number.isNaN(n) ? null : n;
+}
+
+function extractStartmeldungRows(rowsAsArrays, detection) {
+  const { headerRowIdx, nameCol, genderCol, groups } = detection;
+  const outRows = [];
+  const disciplineNamesSet = new Set();
+  let shooterCount = 0;
+  let shootersWithoutResult = 0;
+
+  for (let r = headerRowIdx + 1; r < rowsAsArrays.length; r++) {
+    const row = rowsAsArrays[r] || [];
+    const rawName = row[nameCol];
+    if (!rawName || String(rawName).trim() === '') continue;
+    shooterCount++;
+    const name = normalizeShooterName(rawName);
+    const gender = normalizeGenderCell(row[genderCol]);
+    let hasAnyResult = false;
+
+    for (const g of groups) {
+      const values = [];
+      const bestVal = row[g.bestCol];
+      if (bestVal !== undefined && bestVal !== null && String(bestVal).trim() !== '') {
+        const n = parseNumericToken(bestVal);
+        if (n !== null) values.push(n);
+      }
+      const folgeVal = g.folgeCol !== null ? row[g.folgeCol] : undefined;
+      if (folgeVal !== undefined && folgeVal !== null && String(folgeVal).trim() !== '') {
+        String(folgeVal).trim().split(/\s+/).forEach((tok) => {
+          const n = parseNumericToken(tok);
+          if (n !== null) values.push(n);
+        });
+      }
+      if (values.length === 0) continue;
+      hasAnyResult = true;
+      disciplineNamesSet.add(g.disciplineName);
+      values.forEach((points, idx) => {
+        outRows.push({ name, gender, discipline: g.disciplineName, round: idx + 1, points });
+      });
+    }
+    if (!hasAnyResult) shootersWithoutResult++;
+  }
+
+  return {
+    rows: outRows,
+    disciplineNames: [...disciplineNamesSet],
+    shooterCount,
+    shootersWithoutResult,
+  };
+}
+
 document.getElementById('importFile').addEventListener('change', async (e) => {
   const file = e.target.files[0];
   if (!file) return;
   const resultEl = document.getElementById('importResult');
   resultEl.textContent = '';
-  let rowsAsArrays;
+  document.getElementById('importDetectedWrap').style.display = 'none';
+  document.getElementById('importPreviewWrap').style.display = 'none';
+  detectedExtraction = null;
+
+  let sheets = null; // { name: { rows: rowsAsArrays, merges } } für alle Blätter (nur bei xlsx)
+  let rowsAsArrays; // Fallback: einzelnes Blatt/CSV
+
   try {
     if (file.name.match(/\.(xlsx|xls|xlsm)$/i)) {
       resultEl.textContent = 'Lade Excel-Bibliothek...';
       await loadSheetJS();
       const buf = await file.arrayBuffer();
       const wb = window.XLSX.read(buf, { type: 'array' });
-      const sheet = wb.Sheets[wb.SheetNames[0]];
-      rowsAsArrays = window.XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+      sheets = {};
+      for (const name of wb.SheetNames) {
+        const ws = wb.Sheets[name];
+        sheets[name] = {
+          rows: window.XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' }),
+          merges: ws['!merges'] || [],
+        };
+      }
+      rowsAsArrays = sheets[wb.SheetNames[0]].rows;
       resultEl.textContent = '';
     } else {
       const text = await file.text();
@@ -337,19 +485,69 @@ document.getElementById('importFile').addEventListener('change', async (e) => {
     return;
   }
 
-  if (!rowsAsArrays.length) {
+  if (!rowsAsArrays || !rowsAsArrays.length) {
     resultEl.textContent = 'Datei enthält keine Daten.';
     return;
   }
 
+  // Versuche automatische Erkennung des "Startmeldung"-Formats über alle Blätter,
+  // bevorzugt ein Blatt, das "Startmeldung" heißt.
+  if (sheets) {
+    const orderedNames = Object.keys(sheets).sort((a, b) => {
+      const aMatch = a.toLowerCase().includes('startmeldung') ? 0 : 1;
+      const bMatch = b.toLowerCase().includes('startmeldung') ? 0 : 1;
+      return aMatch - bMatch;
+    });
+    for (const name of orderedNames) {
+      const { rows, merges } = sheets[name];
+      const detection = detectStartmeldung(rows, merges);
+      if (detection) {
+        const extraction = extractStartmeldungRows(rows, detection);
+        if (extraction.rows.length > 0) {
+          showDetectedPreview(name, extraction, rows, detection);
+          return;
+        }
+      }
+    }
+  }
+
+  // Fallback: generische Spalten-Zuordnung (langes Format, eine Zeile = ein Ergebnis)
   importHeaders = rowsAsArrays[0].map(String);
   importRows = rowsAsArrays.slice(1).map((row) => {
     const obj = {};
     importHeaders.forEach((h, i) => (obj[h] = row[i] !== undefined ? String(row[i]) : ''));
     return obj;
   });
-
   renderMappingUI();
+});
+
+function showDetectedPreview(sheetName, extraction, rowsAsArrays, detection) {
+  detectedExtraction = extraction;
+  document.getElementById('detectedSheetName').textContent = sheetName;
+  document.getElementById('detectedSummary').textContent =
+    `${extraction.shooterCount} Schütze(n) gefunden, davon ${extraction.shooterCount - extraction.shootersWithoutResult} mit erfassten Ergebnissen. ` +
+    `Erkannte Disziplinen: ${extraction.disciplineNames.join(', ') || '–'}. ` +
+    `Insgesamt werden ${extraction.rows.length} Einzelergebnisse (Durchgänge) importiert.`;
+  document.getElementById('detectedNote').textContent = extraction.shootersWithoutResult > 0
+    ? `Hinweis: ${extraction.shootersWithoutResult} Schütze(n) ohne bisheriges Ergebnis werden beim Import übersprungen (nur Schützen mit mind. einem Ergebnis werden angelegt). Diese können danach manuell unter "Schützen" ergänzt werden.`
+    : '';
+  document.getElementById('importDetectedWrap').style.display = 'block';
+
+  document.getElementById('switchToManualBtn').onclick = () => {
+    document.getElementById('importDetectedWrap').style.display = 'none';
+    importHeaders = (rowsAsArrays[detection.headerRowIdx] || []).map(String);
+    importRows = rowsAsArrays.slice(detection.headerRowIdx + 1).map((row) => {
+      const obj = {};
+      importHeaders.forEach((h, i) => (obj[h] = row[i] !== undefined ? String(row[i]) : ''));
+      return obj;
+    });
+    renderMappingUI();
+  };
+}
+
+document.getElementById('importDetectedBtn').addEventListener('click', async () => {
+  if (!detectedExtraction) return;
+  await submitImportRows(detectedExtraction.rows);
 });
 
 function renderMappingUI() {
@@ -392,6 +590,10 @@ document.getElementById('importSubmitBtn').addEventListener('click', async () =>
     points: r[mapping.points] || '',
   })).filter((r) => r.name && r.discipline && r.points !== '');
 
+  await submitImportRows(rows);
+});
+
+async function submitImportRows(rows) {
   const resultEl = document.getElementById('importResult');
   resultEl.textContent = 'Importiere ' + rows.length + ' Zeilen...';
   try {
@@ -405,7 +607,7 @@ document.getElementById('importSubmitBtn').addEventListener('click', async () =>
   } catch (err) {
     resultEl.textContent = 'Fehler beim Import: ' + err.message;
   }
-});
+}
 
 // ---------------- Season & Network ----------------
 
