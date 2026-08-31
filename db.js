@@ -4,7 +4,12 @@ const { DatabaseSync } = require('node:sqlite');
 const path = require('node:path');
 const fs = require('node:fs');
 
-const DATA_DIR = path.join(__dirname, 'data');
+// Tests can redirect all persistent state to a temporary directory. In normal
+// operation the environment variable is unset and the existing data directory
+// continues to be used.
+const DATA_DIR = process.env.SCHUETZEN_DATA_DIR
+  ? path.resolve(process.env.SCHUETZEN_DATA_DIR)
+  : path.join(__dirname, 'data');
 const ARCHIVE_DIR = path.join(DATA_DIR, 'archive');
 const DB_PATH = path.join(DATA_DIR, 'wettkampf.db');
 
@@ -12,6 +17,10 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(ARCHIVE_DIR)) fs.mkdirSync(ARCHIVE_DIR, { recursive: true });
 
 const db = new DatabaseSync(DB_PATH);
+
+// SQLite does not enable foreign-key actions by default. The application relies
+// on ON DELETE CASCADE when a shooter or discipline is removed.
+db.exec('PRAGMA foreign_keys = ON');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS shooters (
@@ -101,6 +110,9 @@ const Shooters = {
   findByName(name) {
     return get('SELECT * FROM shooters WHERE name = ? COLLATE NOCASE', [name]);
   },
+  findById(id) {
+    return get('SELECT * FROM shooters WHERE id = ?', [id]);
+  },
 };
 
 // ---------- Disciplines ----------
@@ -123,6 +135,9 @@ const Disciplines = {
   },
   findByName(name) {
     return get('SELECT * FROM disciplines WHERE name = ? COLLATE NOCASE', [name]);
+  },
+  findById(id) {
+    return get('SELECT * FROM disciplines WHERE id = ?', [id]);
   },
 };
 
@@ -155,6 +170,9 @@ const Results = {
       [shooterId, disciplineId]
     );
     return row.m + 1;
+  },
+  findById(id) {
+    return get('SELECT * FROM results WHERE id = ?', [id]);
   },
 };
 
@@ -220,6 +238,41 @@ function rankingForDiscipline(disciplineId) {
     best_points: e.best_points,
     all_rounds: e.rounds_sorted,
   }));
+}
+
+/**
+ * Kompakter Datenstand fuer die Live-Anzeige im Schuetzenhaus.
+ * Die Ranglisten werden mit derselben Wertungslogik wie in der Verwaltung
+ * berechnet, damit beide Ansichten jederzeit identische Plaetze zeigen.
+ */
+function dashboardSnapshot() {
+  const disciplines = Disciplines.list().map((discipline) => ({
+    id: discipline.id,
+    name: discipline.name,
+    ranking: rankingForDiscipline(discipline.id),
+  }));
+
+  const latestResults = all(
+    `SELECT r.id, r.points, r.round_number, r.created_at,
+            s.name AS shooter_name, d.id AS discipline_id, d.name AS discipline_name
+     FROM results r
+     JOIN shooters s ON s.id = r.shooter_id
+     JOIN disciplines d ON d.id = r.discipline_id
+     ORDER BY r.id DESC
+     LIMIT 10`
+  );
+
+  return {
+    event_title: Season.getTitle(),
+    updated_at: new Date().toISOString(),
+    stats: {
+      shooters: get('SELECT COUNT(*) AS count FROM shooters').count,
+      disciplines: disciplines.length,
+      results: get('SELECT COUNT(*) AS count FROM results').count,
+    },
+    disciplines,
+    latest_results: latestResults,
+  };
 }
 
 // ---------- Season export / reset ----------
@@ -404,6 +457,7 @@ module.exports = {
   Results,
   Season,
   rankingForDiscipline,
+  dashboardSnapshot,
   fullExport,
   archiveCurrentSeason,
   validateSeasonArchive,

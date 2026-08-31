@@ -12,6 +12,7 @@ const {
   Results,
   Season,
   rankingForDiscipline,
+  dashboardSnapshot,
   fullExport,
   archiveCurrentSeason,
   validateSeasonArchive,
@@ -45,6 +46,21 @@ function sendJSON(res, status, data) {
 
 function sendError(res, status, message) {
   sendJSON(res, status, { error: message });
+}
+
+function normalizedName(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function parsePositiveInteger(value) {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function parseFiniteNumber(value) {
+  if (value === '' || value === null || value === undefined) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function readBody(req) {
@@ -112,18 +128,25 @@ async function handleApi(req, res, pathname, query) {
   }
   if (pathname === '/api/shooters' && method === 'POST') {
     const body = await readBody(req);
-    if (!body.name || !body.gender) return sendError(res, 400, 'name und gender erforderlich');
+    const name = normalizedName(body.name);
+    if (!name || !body.gender) return sendError(res, 400, 'name und gender erforderlich');
     if (!['m', 'w'].includes(body.gender)) return sendError(res, 400, "gender muss 'm' oder 'w' sein");
-    return sendJSON(res, 201, Shooters.create({ name: body.name.trim(), gender: body.gender }));
+    return sendJSON(res, 201, Shooters.create({ name, gender: body.gender }));
   }
   let m;
   if ((m = pathname.match(/^\/api\/shooters\/(\d+)$/))) {
     const id = Number(m[1]);
     if (method === 'PUT') {
       const body = await readBody(req);
-      return sendJSON(res, 200, Shooters.update(id, { name: body.name, gender: body.gender }));
+      const name = normalizedName(body.name);
+      if (!name || !['m', 'w'].includes(body.gender)) {
+        return sendError(res, 400, 'Gültiger Name und gender erforderlich');
+      }
+      if (!Shooters.findById(id)) return sendError(res, 404, 'Schütze nicht gefunden');
+      return sendJSON(res, 200, Shooters.update(id, { name, gender: body.gender }));
     }
     if (method === 'DELETE') {
+      if (!Shooters.findById(id)) return sendError(res, 404, 'Schütze nicht gefunden');
       Shooters.remove(id);
       return sendJSON(res, 200, { ok: true });
     }
@@ -135,16 +158,25 @@ async function handleApi(req, res, pathname, query) {
   }
   if (pathname === '/api/disciplines' && method === 'POST') {
     const body = await readBody(req);
-    if (!body.name) return sendError(res, 400, 'name erforderlich');
-    return sendJSON(res, 201, Disciplines.create({ name: body.name.trim() }));
+    const name = normalizedName(body.name);
+    if (!name) return sendError(res, 400, 'name erforderlich');
+    if (Disciplines.findByName(name)) return sendError(res, 409, 'Disziplin existiert bereits');
+    return sendJSON(res, 201, Disciplines.create({ name }));
   }
   if ((m = pathname.match(/^\/api\/disciplines\/(\d+)$/))) {
     const id = Number(m[1]);
     if (method === 'PUT') {
       const body = await readBody(req);
-      return sendJSON(res, 200, Disciplines.update(id, { name: body.name }));
+      const name = normalizedName(body.name);
+      if (!name) return sendError(res, 400, 'name erforderlich');
+      const current = Disciplines.findById(id);
+      if (!current) return sendError(res, 404, 'Disziplin nicht gefunden');
+      const duplicate = Disciplines.findByName(name);
+      if (duplicate && duplicate.id !== id) return sendError(res, 409, 'Disziplin existiert bereits');
+      return sendJSON(res, 200, Disciplines.update(id, { name }));
     }
     if (method === 'DELETE') {
+      if (!Disciplines.findById(id)) return sendError(res, 404, 'Disziplin nicht gefunden');
       Disciplines.remove(id);
       return sendJSON(res, 200, { ok: true });
     }
@@ -159,20 +191,40 @@ async function handleApi(req, res, pathname, query) {
   }
   if (pathname === '/api/results' && method === 'POST') {
     const body = await readBody(req);
-    const { shooter_id, discipline_id, points } = body;
-    if (!shooter_id || !discipline_id || points === undefined || points === null || points === '') {
+    const shooterId = parsePositiveInteger(body.shooter_id);
+    const disciplineId = parsePositiveInteger(body.discipline_id);
+    const points = parseFiniteNumber(body.points);
+    if (!shooterId || !disciplineId || points === null) {
       return sendError(res, 400, 'shooter_id, discipline_id und points erforderlich');
     }
-    const round_number = body.round_number || Results.nextRoundNumber(shooter_id, discipline_id);
-    return sendJSON(res, 201, Results.create({ shooter_id, discipline_id, round_number, points: Number(points) }));
+    if (!Shooters.findById(shooterId) || !Disciplines.findById(disciplineId)) {
+      return sendError(res, 400, 'Schütze oder Disziplin ist ungültig');
+    }
+    const roundNumber = body.round_number === undefined || body.round_number === null || body.round_number === ''
+      ? Results.nextRoundNumber(shooterId, disciplineId)
+      : parsePositiveInteger(body.round_number);
+    if (!roundNumber) return sendError(res, 400, 'round_number muss eine positive ganze Zahl sein');
+    return sendJSON(res, 201, Results.create({
+      shooter_id: shooterId,
+      discipline_id: disciplineId,
+      round_number: roundNumber,
+      points,
+    }));
   }
   if ((m = pathname.match(/^\/api\/results\/(\d+)$/))) {
     const id = Number(m[1]);
     if (method === 'PUT') {
       const body = await readBody(req);
-      return sendJSON(res, 200, Results.update(id, { points: Number(body.points), round_number: body.round_number }));
+      if (!Results.findById(id)) return sendError(res, 404, 'Ergebnis nicht gefunden');
+      const points = parseFiniteNumber(body.points);
+      const roundNumber = parsePositiveInteger(body.round_number);
+      if (points === null || !roundNumber) {
+        return sendError(res, 400, 'Gültige Punkte und round_number erforderlich');
+      }
+      return sendJSON(res, 200, Results.update(id, { points, round_number: roundNumber }));
     }
     if (method === 'DELETE') {
+      if (!Results.findById(id)) return sendError(res, 404, 'Ergebnis nicht gefunden');
       Results.remove(id);
       return sendJSON(res, 200, { ok: true });
     }
@@ -182,6 +234,12 @@ async function handleApi(req, res, pathname, query) {
   if ((m = pathname.match(/^\/api\/rankings\/(\d+)$/)) && method === 'GET') {
     const disciplineId = Number(m[1]);
     return sendJSON(res, 200, rankingForDiscipline(disciplineId));
+  }
+
+  // ---- Live-Dashboard (TV-Ansicht) ----
+  if (pathname === '/api/dashboard' && method === 'GET') {
+    res.setHeader('Cache-Control', 'no-store');
+    return sendJSON(res, 200, dashboardSnapshot());
   }
 
   // ---- Import ----
@@ -307,10 +365,14 @@ const server = http.createServer(async (req, res) => {
   serveStatic(req, res, pathname);
 });
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Schuetzen-Wettkampf-Server laeuft auf Port ${PORT}`);
-  console.log(`Lokal:   http://localhost:${PORT}`);
-  for (const ip of getLanIPs()) {
-    console.log(`Im LAN:  http://${ip}:${PORT}`);
-  }
-});
+if (require.main === module) {
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`Schuetzen-Wettkampf-Server laeuft auf Port ${PORT}`);
+    console.log(`Lokal:   http://localhost:${PORT}`);
+    for (const ip of getLanIPs()) {
+      console.log(`Im LAN:  http://${ip}:${PORT}`);
+    }
+  });
+}
+
+module.exports = { server, handleApi };

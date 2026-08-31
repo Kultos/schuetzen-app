@@ -29,6 +29,15 @@ let state = {
   eventTitle: '',
 };
 
+const dashboardState = {
+  snapshot: null,
+  disciplineId: null,
+  refreshTimer: null,
+  rotationTimer: null,
+  clockTimer: null,
+  isLoading: false,
+};
+
 function renderEventTitle() {
   const printEventTitle = document.getElementById('printEventTitle');
   printEventTitle.textContent = state.eventTitle;
@@ -50,11 +59,172 @@ document.querySelectorAll('.tab').forEach((btn) => {
     document.querySelectorAll('.panel').forEach((p) => p.classList.remove('active'));
     btn.classList.add('active');
     document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    if (btn.dataset.tab === 'dashboard') startDashboard();
+    else stopDashboard();
     if (btn.dataset.tab === 'results') refreshResultSelectors();
     if (btn.dataset.tab === 'rankings') refreshRankingSelector();
     if (btn.dataset.tab === 'season') refreshSeasonInfo();
   });
 });
+
+function activateTab(tabName) {
+  const button = document.querySelector(`.tab[data-tab="${tabName}"]`);
+  if (button) button.click();
+}
+
+// ---------------- Live Dashboard ----------------
+
+function formatPoints(points) {
+  return Number(points).toLocaleString('de-DE', { maximumFractionDigits: 1 });
+}
+
+function updateDashboardClock() {
+  document.getElementById('dashboardClock').textContent = new Date().toLocaleTimeString('de-DE', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
+function setDashboardStatus(online) {
+  const status = document.getElementById('dashboardStatus');
+  status.classList.toggle('offline', !online);
+  status.lastChild.textContent = online ? ' LIVE' : ' VERBINDUNG';
+}
+
+function renderDashboardNavigation(disciplines) {
+  const nav = document.getElementById('dashboardDisciplineNav');
+  nav.innerHTML = '';
+  for (const discipline of disciplines) {
+    nav.appendChild(el('button', {
+      type: 'button',
+      class: String(discipline.id) === String(dashboardState.disciplineId) ? 'active' : '',
+      text: discipline.name,
+      onclick: () => {
+        dashboardState.disciplineId = discipline.id;
+        renderDashboard();
+        scheduleDashboardRotation();
+      },
+    }));
+  }
+}
+
+function renderDashboardRanking(discipline) {
+  document.getElementById('dashboardDisciplineTitle').textContent = discipline ? discipline.name : 'Noch keine Disziplin';
+  const container = document.getElementById('dashboardRanking');
+  container.innerHTML = '';
+
+  if (!discipline || !discipline.ranking.length) {
+    container.appendChild(el('div', { class: 'dashboard-empty', text: 'Sobald Ergebnisse erfasst sind, erscheint hier die Rangliste.' }));
+    return;
+  }
+
+  const list = el('ol', { class: 'ranking-list' });
+  for (const entry of discipline.ranking.slice(0, 8)) {
+    const medal = entry.rank <= 3 ? ` rank-${entry.rank}` : '';
+    list.appendChild(el('li', { class: `ranking-row${medal}` }, [
+      el('span', { class: 'rank-number', text: entry.rank }),
+      el('span', { class: 'rank-name', text: entry.name }),
+      el('span', { class: 'rank-rounds', text: entry.all_rounds.slice(0, 3).map(formatPoints).join(' · ') }),
+      el('strong', { class: 'rank-score', text: formatPoints(entry.best_points) }),
+    ]));
+  }
+  container.appendChild(list);
+}
+
+function renderLatestResults(results) {
+  const container = document.getElementById('dashboardLatestResults');
+  container.innerHTML = '';
+  if (!results.length) {
+    container.appendChild(el('div', { class: 'dashboard-empty', text: 'Die neuesten Wertungen werden hier live eingeblendet.' }));
+    return;
+  }
+
+  for (const result of results.slice(0, 8)) {
+    container.appendChild(el('div', { class: 'result-ticker-row' }, [
+      el('div', {}, [
+        el('strong', { text: result.shooter_name }),
+        el('span', { text: `${result.discipline_name} · Durchgang ${result.round_number}` }),
+      ]),
+      el('strong', { class: 'result-score', text: formatPoints(result.points) }),
+    ]));
+  }
+}
+
+function renderDashboard() {
+  const data = dashboardState.snapshot;
+  if (!data) return;
+  const disciplines = data.disciplines || [];
+  if (!disciplines.some((d) => String(d.id) === String(dashboardState.disciplineId))) {
+    dashboardState.disciplineId = disciplines[0] ? disciplines[0].id : null;
+  }
+  const selected = disciplines.find((d) => String(d.id) === String(dashboardState.disciplineId));
+
+  document.getElementById('dashboardEventTitle').textContent = data.event_title || 'Schützen-Wettkampf';
+  document.getElementById('dashboardShooterCount').textContent = data.stats.shooters;
+  document.getElementById('dashboardDisciplineCount').textContent = data.stats.disciplines;
+  document.getElementById('dashboardResultCount').textContent = data.stats.results;
+  document.getElementById('dashboardUpdated').textContent = 'Aktualisiert ' + new Date(data.updated_at).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+  renderDashboardNavigation(disciplines);
+  renderDashboardRanking(selected);
+  renderLatestResults(data.latest_results || []);
+}
+
+async function refreshDashboard() {
+  if (dashboardState.isLoading) return;
+  dashboardState.isLoading = true;
+  try {
+    dashboardState.snapshot = await api('/api/dashboard');
+    renderDashboard();
+    setDashboardStatus(true);
+  } catch (err) {
+    setDashboardStatus(false);
+    document.getElementById('dashboardUpdated').textContent = 'Keine Verbindung – nächster Versuch läuft';
+  } finally {
+    dashboardState.isLoading = false;
+  }
+}
+
+function scheduleDashboardRotation() {
+  clearInterval(dashboardState.rotationTimer);
+  const seconds = Number(document.getElementById('dashboardRotation').value);
+  const progress = document.getElementById('dashboardRotationProgress');
+  progress.style.setProperty('--rotation-seconds', `${seconds}s`);
+  progress.classList.toggle('running', seconds > 0);
+  if (!seconds) return;
+
+  dashboardState.rotationTimer = setInterval(() => {
+    const disciplines = dashboardState.snapshot?.disciplines || [];
+    if (disciplines.length < 2) return;
+    const index = disciplines.findIndex((d) => String(d.id) === String(dashboardState.disciplineId));
+    dashboardState.disciplineId = disciplines[(index + 1) % disciplines.length].id;
+    renderDashboard();
+    progress.classList.remove('running');
+    void progress.offsetWidth;
+    progress.classList.add('running');
+  }, seconds * 1000);
+}
+
+function startDashboard() {
+  clearInterval(dashboardState.refreshTimer);
+  clearInterval(dashboardState.clockTimer);
+  updateDashboardClock();
+  refreshDashboard();
+  dashboardState.refreshTimer = setInterval(refreshDashboard, 5000);
+  dashboardState.clockTimer = setInterval(updateDashboardClock, 1000);
+  scheduleDashboardRotation();
+}
+
+function stopDashboard() {
+  if (document.body.classList.contains('tv-mode')) return;
+  clearInterval(dashboardState.refreshTimer);
+  clearInterval(dashboardState.rotationTimer);
+  clearInterval(dashboardState.clockTimer);
+}
+
+document.getElementById('dashboardRotation').addEventListener('change', scheduleDashboardRotation);
+document.getElementById('openTvDashboardBtn').addEventListener('click', () => window.open('/dashboard', '_blank'));
+document.getElementById('exitTvDashboardBtn').addEventListener('click', () => { window.location.href = '/'; });
 
 // ---------------- Shooters ----------------
 
@@ -730,3 +900,8 @@ document.getElementById('resetSeasonBtn').addEventListener('click', async () => 
 loadShooters();
 loadDisciplines();
 loadEventTitle();
+
+if (window.location.pathname === '/dashboard') {
+  document.body.classList.add('tv-mode');
+  activateTab('dashboard');
+}

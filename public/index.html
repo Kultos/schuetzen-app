@@ -13,6 +13,7 @@
       <h1>Schützen-Wettkampf Auswertung</h1>
     </div>
     <nav class="tabs">
+      <button data-tab="dashboard" class="tab">Live-Dashboard</button>
       <button data-tab="shooters" class="tab active">Schützen</button>
       <button data-tab="disciplines" class="tab">Disziplinen</button>
       <button data-tab="results" class="tab">Ergebnisse erfassen</button>
@@ -23,6 +24,74 @@
   </header>
 
   <main>
+    <!-- LIVE-DASHBOARD -->
+    <section id="tab-dashboard" class="panel dashboard-panel">
+      <div class="dashboard-controls no-tv">
+        <div>
+          <strong>TV-Ansicht</strong>
+          <span>Aktualisiert sich alle 5 Sekunden automatisch.</span>
+        </div>
+        <div class="dashboard-actions">
+          <label for="dashboardRotation">Disziplin wechseln</label>
+          <select id="dashboardRotation">
+            <option value="15">alle 15 Sekunden</option>
+            <option value="30">alle 30 Sekunden</option>
+            <option value="0">nicht automatisch</option>
+          </select>
+          <button id="openTvDashboardBtn">Auf TV öffnen</button>
+        </div>
+      </div>
+
+      <div id="liveDashboard" class="live-dashboard">
+        <header class="live-header">
+          <div class="live-brand">
+            <img src="/logo.png" alt="" onerror="this.style.display='none'">
+            <div>
+              <p class="live-kicker">Live aus dem Schützenhaus</p>
+              <h2 id="dashboardEventTitle">Schützen-Wettkampf</h2>
+            </div>
+          </div>
+          <div class="live-status-wrap">
+            <span id="dashboardStatus" class="live-status" aria-live="polite"><i></i> LIVE</span>
+            <time id="dashboardClock"></time>
+          </div>
+        </header>
+
+        <div class="live-summary" aria-label="Veranstaltungsübersicht">
+          <div><strong id="dashboardShooterCount">0</strong><span>Schützen</span></div>
+          <div><strong id="dashboardDisciplineCount">0</strong><span>Disziplinen</span></div>
+          <div><strong id="dashboardResultCount">0</strong><span>Ergebnisse</span></div>
+          <p id="dashboardUpdated">Warte auf Daten …</p>
+        </div>
+
+        <nav id="dashboardDisciplineNav" class="discipline-nav" aria-label="Disziplin auswählen"></nav>
+
+        <div class="live-grid">
+          <article class="live-card leaderboard-card">
+            <div class="live-card-heading">
+              <div>
+                <span>Aktuelle Rangliste</span>
+                <h3 id="dashboardDisciplineTitle">Noch keine Disziplin</h3>
+              </div>
+              <span id="dashboardRotationProgress" class="rotation-progress" aria-hidden="true"></span>
+            </div>
+            <div id="dashboardRanking" class="dashboard-ranking"></div>
+          </article>
+
+          <article class="live-card results-card">
+            <div class="live-card-heading">
+              <div>
+                <span>Soeben eingegangen</span>
+                <h3>Neueste Ergebnisse</h3>
+              </div>
+            </div>
+            <div id="dashboardLatestResults" class="latest-results"></div>
+          </article>
+        </div>
+      </div>
+      <button id="exitTvDashboardBtn" class="exit-tv-button tv-only">Verwaltung öffnen</button>
+    </section>
+
     <!-- SCHÜTZEN -->
     <section id="tab-shooters" class="panel active">
       <h2>Schützen</h2>
