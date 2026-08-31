@@ -306,6 +306,7 @@ document.getElementById('printRankingBtn').addEventListener('click', () => windo
 let importRows = []; // array of objects keyed by detected column header (manueller Modus)
 let importHeaders = [];
 let detectedExtraction = null; // { rows, disciplineNames, shooterCount } vom Startmeldung-Auto-Import
+let detectedArchive = null;
 
 function parseCSV(text) {
   // Trennzeichen erkennen (Komma, Semikolon, Tab)
@@ -469,13 +470,28 @@ document.getElementById('importFile').addEventListener('change', async (e) => {
   resultEl.textContent = '';
   document.getElementById('importDetectedWrap').style.display = 'none';
   document.getElementById('importPreviewWrap').style.display = 'none';
+  document.getElementById('importArchiveWrap').style.display = 'none';
   detectedExtraction = null;
+  detectedArchive = null;
 
   let sheets = null; // { name: { rows: rowsAsArrays, merges } } für alle Blätter (nur bei xlsx)
   let rowsAsArrays; // Fallback: einzelnes Blatt/CSV
 
   try {
-    if (file.name.match(/\.(xlsx|xls|xlsm)$/i)) {
+    if (file.name.match(/\.json$/i)) {
+      const archive = JSON.parse(await file.text());
+      if (!archive || !Array.isArray(archive.shooters) || !Array.isArray(archive.disciplines) || !Array.isArray(archive.results)) {
+        throw new Error('Die JSON-Datei ist kein gültiges Saisonarchiv.');
+      }
+      detectedArchive = archive;
+      const title = typeof archive.event_title === 'string' && archive.event_title.trim()
+        ? `„${archive.event_title.trim()}“`
+        : 'ohne Eventtitel';
+      document.getElementById('archiveImportSummary').textContent =
+        `${title}: ${archive.shooters.length} Schütze(n), ${archive.disciplines.length} Disziplin(en), ${archive.results.length} Ergebnis(se).`;
+      document.getElementById('importArchiveWrap').style.display = 'block';
+      return;
+    } else if (file.name.match(/\.(xlsx|xls|xlsm)$/i)) {
       resultEl.textContent = 'Lade Excel-Bibliothek...';
       await loadSheetJS();
       const buf = await file.arrayBuffer();
@@ -533,6 +549,28 @@ document.getElementById('importFile').addEventListener('change', async (e) => {
     return obj;
   });
   renderMappingUI();
+});
+
+document.getElementById('importArchiveBtn').addEventListener('click', async () => {
+  if (!detectedArchive) return;
+  if (!confirm('Die aktuelle Saison wird vollständig durch dieses JSON-Archiv ersetzt. Fortfahren?')) return;
+  const resultEl = document.getElementById('importResult');
+  resultEl.textContent = 'Saisonarchiv wird wiederhergestellt...';
+  try {
+    const result = await api('/api/import/archive', {
+      method: 'POST',
+      body: JSON.stringify({ archive: detectedArchive }),
+    });
+    resultEl.textContent =
+      `Saison „${result.event_title || 'ohne Titel'}“ wiederhergestellt: ${result.restored.shooters} Schütze(n), ` +
+      `${result.restored.disciplines} Disziplin(en), ${result.restored.results} Ergebnis(se).` +
+      (result.backup ? `\nDie vorherige Saison wurde als ${result.backup} archiviert.` : '');
+    detectedArchive = null;
+    document.getElementById('importArchiveWrap').style.display = 'none';
+    await Promise.all([loadShooters(), loadDisciplines(), loadEventTitle()]);
+  } catch (err) {
+    resultEl.textContent = 'Fehler beim JSON-Import: ' + err.message;
+  }
 });
 
 function showDetectedPreview(sheetName, extraction, rowsAsArrays, detection) {

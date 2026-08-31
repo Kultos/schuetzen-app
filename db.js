@@ -237,9 +237,148 @@ function fullExport() {
 function archiveCurrentSeason(label) {
   const data = fullExport();
   const safeLabel = (label || Season.getTitle() || `saison-${Date.now()}`).replace(/[^a-zA-Z0-9_\-]/g, '_');
-  const filePath = path.join(ARCHIVE_DIR, `${safeLabel}.json`);
+  let filePath = path.join(ARCHIVE_DIR, `${safeLabel}.json`);
+  let suffix = 2;
+  while (fs.existsSync(filePath)) {
+    filePath = path.join(ARCHIVE_DIR, `${safeLabel}-${suffix}.json`);
+    suffix++;
+  }
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
   return filePath;
+}
+
+function validateSeasonArchive(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new Error('Die JSON-Datei enthält kein gültiges Saisonarchiv');
+  }
+
+  const eventTitle = typeof data.event_title === 'string' ? data.event_title.trim() : '';
+  if (eventTitle.length > 200) throw new Error('Der Eventtitel ist länger als 200 Zeichen');
+  if (!Array.isArray(data.shooters) || !Array.isArray(data.disciplines) || !Array.isArray(data.results)) {
+    throw new Error('Im Saisonarchiv fehlen Schützen, Disziplinen oder Ergebnisse');
+  }
+
+  const validateId = (value, label) => {
+    if (!Number.isSafeInteger(value) || value < 1) throw new Error(`${label} ist ungültig`);
+    return value;
+  };
+  const validateCreatedAt = (value, label) => {
+    if (typeof value !== 'string' || !value.trim()) throw new Error(`${label}: Erstellungsdatum fehlt`);
+    return value;
+  };
+
+  const shooterIds = new Set();
+  const shooters = data.shooters.map((item, index) => {
+    if (!item || typeof item !== 'object') throw new Error(`Schütze ${index + 1} ist ungültig`);
+    const id = validateId(item.id, `Schütze ${index + 1}: ID`);
+    if (shooterIds.has(id)) throw new Error(`Schützen-ID ${id} kommt mehrfach vor`);
+    shooterIds.add(id);
+    const name = typeof item.name === 'string' ? item.name.trim() : '';
+    if (!name) throw new Error(`Schütze ${index + 1}: Name fehlt`);
+    if (!['m', 'w'].includes(item.gender)) throw new Error(`Schütze ${index + 1}: Geschlecht ist ungültig`);
+    return { id, name, gender: item.gender, created_at: validateCreatedAt(item.created_at, `Schütze ${index + 1}`) };
+  });
+
+  const disciplineIds = new Set();
+  const disciplineNames = new Set();
+  const disciplines = data.disciplines.map((item, index) => {
+    if (!item || typeof item !== 'object') throw new Error(`Disziplin ${index + 1} ist ungültig`);
+    const id = validateId(item.id, `Disziplin ${index + 1}: ID`);
+    if (disciplineIds.has(id)) throw new Error(`Disziplin-ID ${id} kommt mehrfach vor`);
+    disciplineIds.add(id);
+    const name = typeof item.name === 'string' ? item.name.trim() : '';
+    if (!name) throw new Error(`Disziplin ${index + 1}: Name fehlt`);
+    const normalizedName = name.toLocaleLowerCase('de');
+    if (disciplineNames.has(normalizedName)) throw new Error(`Disziplin "${name}" kommt mehrfach vor`);
+    disciplineNames.add(normalizedName);
+    if (!Number.isSafeInteger(item.sort_order)) throw new Error(`Disziplin ${index + 1}: Sortierung ist ungültig`);
+    return {
+      id,
+      name,
+      sort_order: item.sort_order,
+      created_at: validateCreatedAt(item.created_at, `Disziplin ${index + 1}`),
+    };
+  });
+
+  const resultIds = new Set();
+  const results = data.results.map((item, index) => {
+    if (!item || typeof item !== 'object') throw new Error(`Ergebnis ${index + 1} ist ungültig`);
+    const id = validateId(item.id, `Ergebnis ${index + 1}: ID`);
+    if (resultIds.has(id)) throw new Error(`Ergebnis-ID ${id} kommt mehrfach vor`);
+    resultIds.add(id);
+    const shooter_id = validateId(item.shooter_id, `Ergebnis ${index + 1}: Schützen-ID`);
+    const discipline_id = validateId(item.discipline_id, `Ergebnis ${index + 1}: Disziplin-ID`);
+    if (!shooterIds.has(shooter_id)) throw new Error(`Ergebnis ${index + 1} verweist auf einen unbekannten Schützen`);
+    if (!disciplineIds.has(discipline_id)) throw new Error(`Ergebnis ${index + 1} verweist auf eine unbekannte Disziplin`);
+    if (!Number.isSafeInteger(item.round_number) || item.round_number < 1) {
+      throw new Error(`Ergebnis ${index + 1}: Durchgang ist ungültig`);
+    }
+    if (typeof item.points !== 'number' || !Number.isFinite(item.points)) {
+      throw new Error(`Ergebnis ${index + 1}: Punkte sind ungültig`);
+    }
+    return {
+      id,
+      shooter_id,
+      discipline_id,
+      round_number: item.round_number,
+      points: item.points,
+      created_at: validateCreatedAt(item.created_at, `Ergebnis ${index + 1}`),
+    };
+  });
+
+  return { event_title: eventTitle, shooters, disciplines, results };
+}
+
+function restoreSeasonArchive(data) {
+  const archive = validateSeasonArchive(data);
+  const current = fullExport();
+  const hasCurrentData = current.event_title || current.shooters.length || current.disciplines.length || current.results.length;
+  const backupPath = hasCurrentData ? archiveCurrentSeason(current.event_title || 'vor-json-import') : null;
+
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    resetSeason();
+    const insertShooter = db.prepare(
+      'INSERT INTO shooters (id, name, gender, created_at) VALUES (?, ?, ?, ?)'
+    );
+    const insertDiscipline = db.prepare(
+      'INSERT INTO disciplines (id, name, sort_order, created_at) VALUES (?, ?, ?, ?)'
+    );
+    const insertResult = db.prepare(
+      'INSERT INTO results (id, shooter_id, discipline_id, round_number, points, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+    );
+    for (const shooter of archive.shooters) {
+      insertShooter.run(shooter.id, shooter.name, shooter.gender, shooter.created_at);
+    }
+    for (const discipline of archive.disciplines) {
+      insertDiscipline.run(discipline.id, discipline.name, discipline.sort_order, discipline.created_at);
+    }
+    for (const result of archive.results) {
+      insertResult.run(
+        result.id,
+        result.shooter_id,
+        result.discipline_id,
+        result.round_number,
+        result.points,
+        result.created_at
+      );
+    }
+    Season.setTitle(archive.event_title);
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+
+  return {
+    restored: {
+      shooters: archive.shooters.length,
+      disciplines: archive.disciplines.length,
+      results: archive.results.length,
+    },
+    event_title: archive.event_title,
+    backup: backupPath ? path.basename(backupPath) : null,
+  };
 }
 
 function resetSeason() {
@@ -267,6 +406,8 @@ module.exports = {
   rankingForDiscipline,
   fullExport,
   archiveCurrentSeason,
+  validateSeasonArchive,
+  restoreSeasonArchive,
   resetSeason,
   listArchives,
   ARCHIVE_DIR,

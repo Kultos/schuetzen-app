@@ -29,7 +29,8 @@ Im LAN:  http://192.168.x.x:3000
 - **Disziplinen**: Disziplinen für den aktuellen Wettkampf anlegen (beliebig viele, jederzeit erweiterbar).
 - **Ergebnisse erfassen**: Schütze + Disziplin auswählen, dann Durchgänge (Punktzahlen) nacheinander eintragen.
 - **Ranglisten**: Disziplin auswählen → Rangliste wird automatisch berechnet (bester Durchgang zählt, bei Gleichstand entscheidet der nächstbeste Durchgang). Über "Drucken / Als PDF" lässt sich die Liste ausdrucken oder als PDF speichern (im Druckdialog des Browsers "Als PDF speichern" wählen).
-- **Excel/CSV-Import**: Bestehende Excel-Tabellen (.xlsx) oder CSV-Dateien importieren.
+- **Excel/CSV/JSON-Import**: Bestehende Excel-Tabellen (.xlsx), CSV-Dateien oder exportierte JSON-Saisonarchive importieren.
+  - **JSON-Saisonarchive**: Ein zuvor exportiertes oder automatisch archiviertes Event wird mit Titel, allen Schützen, Disziplinen und Ergebnissen vollständig wiederhergestellt. Die aktuell geladene Saison wird ersetzt und vorher automatisch archiviert, sofern sie Daten enthält.
   - **Vereins-Vorlage "Startmeldung"** (wie bisher verwendet, mit "Beste Serie"/"Folgeserien" je Disziplin): wird automatisch erkannt. Es erscheint eine Zusammenfassung (erkannte Disziplinen, Anzahl Schützen/Ergebnisse) – einfach auf "Import starten" klicken. Schützen ohne bisheriges Ergebnis werden dabei übersprungen und müssen danach manuell unter "Schützen" ergänzt werden.
   - **Andere/einfache Listen** (eine Zeile = ein Ergebnis): Nach Dateiauswahl erscheint stattdessen die Spalten-Zuordnung (Name, Geschlecht, Disziplin, Durchgang, Punkte).
   - *Hinweis: Für den Excel-Import (.xlsx/.xlsm) ist einmalig eine Internetverbindung nötig, um eine kleine Hilfsbibliothek zu laden. CSV-Dateien funktionieren immer komplett offline.*
@@ -54,7 +55,7 @@ Da der Wettkampf jährlich neu stattfindet, kann über **"Saison & Netzwerk" →
 → Prüfen, ob Node.js korrekt installiert wurde (in der Eingabeaufforderung `node --version` eingeben – es sollte eine Versionsnummer erscheinen).
 
 **Problem: Ich möchte alte Daten wiederherstellen.**
-→ Im Ordner `data/archive/` liegen die JSON-Archive vergangener Saisons. Diese dienen aktuell als Sicherung/Nachschlagewerk (kein automatischer Wiederherstellungs-Import in der Oberfläche).
+→ Im Ordner `data/archive/` liegen die JSON-Archive vergangener Saisons. Das gewünschte Archiv kann unter **Import** ausgewählt und vollständig wiederhergestellt werden.
 
 ## Vereinslogo einbinden (optional)
 

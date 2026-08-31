@@ -14,6 +14,8 @@ const {
   rankingForDiscipline,
   fullExport,
   archiveCurrentSeason,
+  validateSeasonArchive,
+  restoreSeasonArchive,
   resetSeason,
   listArchives,
   ARCHIVE_DIR,
@@ -218,6 +220,16 @@ async function handleApi(req, res, pathname, query) {
       }
     }
     return sendJSON(res, 200, { created, errors });
+  }
+  if (pathname === '/api/import/archive' && method === 'POST') {
+    const body = await readBody(req);
+    if (!body.archive) return sendError(res, 400, 'Saisonarchiv fehlt');
+    try {
+      validateSeasonArchive(body.archive);
+    } catch (error) {
+      return sendError(res, 400, error.message);
+    }
+    return sendJSON(res, 200, restoreSeasonArchive(body.archive));
   }
 
   // ---- Export (aktuelle Saison als JSON) ----

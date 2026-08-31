@@ -17,7 +17,7 @@
       <button data-tab="disciplines" class="tab">Disziplinen</button>
       <button data-tab="results" class="tab">Ergebnisse erfassen</button>
       <button data-tab="rankings" class="tab">Ranglisten</button>
-      <button data-tab="import" class="tab">Excel/CSV-Import</button>
+      <button data-tab="import" class="tab">Import</button>
       <button data-tab="season" class="tab">Saison &amp; Netzwerk</button>
     </nav>
   </header>
@@ -96,9 +96,18 @@
 
     <!-- IMPORT -->
     <section id="tab-import" class="panel">
-      <h2>Excel/CSV-Import</h2>
-      <p class="hint">Vereins-Vorlagen mit einem "Startmeldung"-Tabellenblatt (Name, Geschlecht, "Beste Serie"/"Folgeserien" je Disziplin) werden automatisch erkannt. Alternativ: einfache Liste mit Spalten <b>Name</b>, <b>Geschlecht</b> (m/w), <b>Disziplin</b>, <b>Durchgang</b> (optional), <b>Punkte</b>.</p>
-      <input type="file" id="importFile" accept=".csv,.xlsx,.xls,.xlsm">
+      <h2>Excel-, CSV- oder JSON-Import</h2>
+      <p class="hint">Exportierte JSON-Saisonarchive werden vollständig wiederhergestellt. Vereins-Vorlagen mit einem "Startmeldung"-Tabellenblatt werden automatisch erkannt. Alternativ: einfache Excel-/CSV-Liste mit Spalten <b>Name</b>, <b>Geschlecht</b> (m/w), <b>Disziplin</b>, <b>Durchgang</b> (optional), <b>Punkte</b>.</p>
+      <input type="file" id="importFile" accept=".json,.csv,.xlsx,.xls,.xlsm">
+
+      <div id="importArchiveWrap" style="display:none">
+        <div class="card">
+          <h3>JSON-Saisonarchiv erkannt</h3>
+          <p id="archiveImportSummary"></p>
+          <p class="hint">Beim Import wird die aktuelle Saison ersetzt. Falls sie Daten enthält, wird vorher automatisch ein lokales Archiv angelegt.</p>
+          <button id="importArchiveBtn">Saison wiederherstellen</button>
+        </div>
+      </div>
 
       <div id="importDetectedWrap" style="display:none">
         <div class="card">
