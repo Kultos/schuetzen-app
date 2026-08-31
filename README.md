@@ -61,3 +61,13 @@ Da der Wettkampf jährlich neu stattfindet, kann über **"Saison & Netzwerk" →
 ## Vereinslogo einbinden (optional)
 
 Eine Bilddatei `logo.png` in den Ordner `public/` legen (gleicher Ordner wie `index.html`). Sie erscheint dann automatisch im Kopfbereich der App und auf den ausgedruckten Ranglisten.
+
+## Tests ausführen
+
+Die automatisierten Tests verwenden ausschließlich temporäre Datenbanken und verändern `data/wettkampf.db` nicht.
+
+```text
+npm test
+```
+
+Alternativ können sie ohne npm direkt mit `node --test --test-concurrency=1` gestartet werden. Ein Coverage-Bericht lässt sich mit `npm run test:coverage` erzeugen. CSV- und Excel-Import sind als veraltet nicht Bestandteil der Testsuite.

@@ -1,0 +1,8 @@
+{
+  "name": "schuetzen-app",
+  "private": true,
+  "scripts": {
+    "test": "node --test --test-concurrency=1",
+    "test:coverage": "node --test --test-concurrency=1 --experimental-test-coverage"
+  }
+}

@@ -1,7 +1,6 @@
 'use strict';
 
 const http = require('node:http');
-const url = require('node:url');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -53,12 +52,13 @@ function normalizedName(value) {
 }
 
 function parsePositiveInteger(value) {
+  if (!['number', 'string'].includes(typeof value) || (typeof value === 'string' && !value.trim())) return null;
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 function parseFiniteNumber(value) {
-  if (value === '' || value === null || value === undefined) return null;
+  if (!['number', 'string'].includes(typeof value) || (typeof value === 'string' && !value.trim())) return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
@@ -350,12 +350,13 @@ async function handleApi(req, res, pathname, query) {
 }
 
 const server = http.createServer(async (req, res) => {
-  const parsed = url.parse(req.url, true);
+  const parsed = new URL(req.url, 'http://localhost');
   const pathname = decodeURIComponent(parsed.pathname);
+  const query = Object.fromEntries(parsed.searchParams);
 
   if (pathname.startsWith('/api/')) {
     try {
-      await handleApi(req, res, pathname, parsed.query);
+      await handleApi(req, res, pathname, query);
     } catch (e) {
       sendError(res, 500, e.message || 'Serverfehler');
     }
