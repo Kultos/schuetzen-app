@@ -33,7 +33,7 @@ Im LAN:  http://192.168.x.x:3000
   - **Vereins-Vorlage "Startmeldung"** (wie bisher verwendet, mit "Beste Serie"/"Folgeserien" je Disziplin): wird automatisch erkannt. Es erscheint eine Zusammenfassung (erkannte Disziplinen, Anzahl Schützen/Ergebnisse) – einfach auf "Import starten" klicken. Schützen ohne bisheriges Ergebnis werden dabei übersprungen und müssen danach manuell unter "Schützen" ergänzt werden.
   - **Andere/einfache Listen** (eine Zeile = ein Ergebnis): Nach Dateiauswahl erscheint stattdessen die Spalten-Zuordnung (Name, Geschlecht, Disziplin, Durchgang, Punkte).
   - *Hinweis: Für den Excel-Import (.xlsx/.xlsm) ist einmalig eine Internetverbindung nötig, um eine kleine Hilfsbibliothek zu laden. CSV-Dateien funktionieren immer komplett offline.*
-- **Saison & Netzwerk**: Zeigt die Netzwerkadresse für andere Geräte, ermöglicht den Export der aktuellen Daten als Sicherung sowie das Starten einer neuen Saison (siehe unten).
+- **Saison & Netzwerk**: Hier kann der Titel des aktuellen Events (z.B. „Vereinsschießen 2026“) gespeichert werden. Er erscheint auf gedruckten Ranglisten, ist im Export enthalten und wird als Export-/Archivdateiname verwendet. Außerdem zeigt die Ansicht die Netzwerkadresse und ermöglicht das Starten einer neuen Saison (siehe unten).
 
 ## Neue Saison starten
 

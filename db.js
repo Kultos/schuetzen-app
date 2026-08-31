@@ -39,6 +39,11 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_results_shooter_discipline
     ON results(shooter_id, discipline_id);
+
+  CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
 `);
 
 // ---------- Helpers ----------
@@ -57,6 +62,24 @@ function run(sql, params = []) {
   const stmt = db.prepare(sql);
   return stmt.run(...params);
 }
+
+// ---------- Settings ----------
+
+const Season = {
+  getTitle() {
+    const row = get("SELECT value FROM settings WHERE key = 'event_title'");
+    return row ? row.value : '';
+  },
+  setTitle(title) {
+    const value = String(title || '').trim();
+    run(
+      `INSERT INTO settings (key, value) VALUES ('event_title', ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      [value]
+    );
+    return value;
+  },
+};
 
 // ---------- Shooters ----------
 
@@ -203,6 +226,7 @@ function rankingForDiscipline(disciplineId) {
 
 function fullExport() {
   return {
+    event_title: Season.getTitle(),
     exported_at: new Date().toISOString(),
     shooters: all('SELECT * FROM shooters'),
     disciplines: all('SELECT * FROM disciplines'),
@@ -212,7 +236,7 @@ function fullExport() {
 
 function archiveCurrentSeason(label) {
   const data = fullExport();
-  const safeLabel = (label || `saison-${Date.now()}`).replace(/[^a-zA-Z0-9_\-]/g, '_');
+  const safeLabel = (label || Season.getTitle() || `saison-${Date.now()}`).replace(/[^a-zA-Z0-9_\-]/g, '_');
   const filePath = path.join(ARCHIVE_DIR, `${safeLabel}.json`);
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
   return filePath;
@@ -223,6 +247,7 @@ function resetSeason() {
   run('DELETE FROM disciplines');
   run('DELETE FROM shooters');
   run("DELETE FROM sqlite_sequence WHERE name IN ('results','disciplines','shooters')");
+  Season.setTitle('');
 }
 
 function listArchives() {
@@ -238,6 +263,7 @@ module.exports = {
   Shooters,
   Disciplines,
   Results,
+  Season,
   rankingForDiscipline,
   fullExport,
   archiveCurrentSeason,

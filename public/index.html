@@ -82,6 +82,7 @@
         <div class="print-header">
           <img id="printLogo" src="/logo.png" alt="" onerror="this.style.display='none'">
           <div>
+            <h1 id="printEventTitle"></h1>
             <h2 id="printTitle">Rangliste</h2>
             <div id="printDate"></div>
           </div>
@@ -121,6 +122,15 @@
     <section id="tab-season" class="panel">
       <h2>Saison &amp; Netzwerk</h2>
       <div class="card">
+        <h3>Eventtitel</h3>
+        <p class="hint">Der Titel erscheint auf Ergebnislisten und wird als Dateiname für Exporte und Archive verwendet.</p>
+        <form id="seasonTitleForm" class="inline-form">
+          <input type="text" id="seasonTitle" maxlength="200" placeholder="z.B. Vereinsschießen 2026">
+          <button type="submit">Titel speichern</button>
+          <span id="seasonTitleStatus" class="hint" aria-live="polite"></span>
+        </form>
+      </div>
+      <div class="card">
         <h3>Zugriff im lokalen Netzwerk</h3>
         <p>Andere Geräte (z.B. Smartphone) können über folgende Adresse zugreifen, wenn sie im selben WLAN sind:</p>
         <ul id="lanIpList"></ul>
@@ -132,8 +142,7 @@
       </div>
       <div class="card">
         <h3>Neue Saison starten</h3>
-        <p class="hint">Vor dem Zurücksetzen wird automatisch ein Archiv der aktuellen Saison gespeichert.</p>
-        <input type="text" id="seasonLabel" placeholder="Bezeichnung (z.B. Saison-2026)">
+        <p class="hint">Vor dem Zurücksetzen wird automatisch ein Archiv mit dem oben gespeicherten Eventtitel angelegt. Danach kann ein neuer Titel vergeben werden.</p>
         <button id="resetSeasonBtn" class="danger">Neue Saison starten (setzt alle Daten zurück)</button>
       </div>
       <div class="card">

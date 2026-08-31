@@ -26,7 +26,21 @@ function el(tag, attrs = {}, children = []) {
 let state = {
   shooters: [],
   disciplines: [],
+  eventTitle: '',
 };
+
+function renderEventTitle() {
+  const printEventTitle = document.getElementById('printEventTitle');
+  printEventTitle.textContent = state.eventTitle;
+  printEventTitle.style.display = state.eventTitle ? '' : 'none';
+}
+
+async function loadEventTitle() {
+  const season = await api('/api/season');
+  state.eventTitle = season.title || '';
+  document.getElementById('seasonTitle').value = state.eventTitle;
+  renderEventTitle();
+}
 
 // ---------------- Tabs ----------------
 
@@ -612,6 +626,7 @@ async function submitImportRows(rows) {
 // ---------------- Season & Network ----------------
 
 async function refreshSeasonInfo() {
+  await loadEventTitle();
   const info = await api('/api/info');
   const ipList = document.getElementById('lanIpList');
   ipList.innerHTML = '';
@@ -643,11 +658,28 @@ document.getElementById('exportBtn').addEventListener('click', () => {
   window.location.href = '/api/export';
 });
 
+document.getElementById('seasonTitleForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const status = document.getElementById('seasonTitleStatus');
+  const title = document.getElementById('seasonTitle').value.trim();
+  try {
+    const season = await api('/api/season', { method: 'PUT', body: JSON.stringify({ title }) });
+    state.eventTitle = season.title;
+    renderEventTitle();
+    status.textContent = 'Gespeichert.';
+  } catch (err) {
+    status.textContent = 'Fehler: ' + err.message;
+  }
+});
+
 document.getElementById('resetSeasonBtn').addEventListener('click', async () => {
   if (!confirm('Wirklich eine neue Saison starten? Alle aktuellen Schützen, Disziplinen und Ergebnisse werden gelöscht (nach automatischem Archiv-Export).')) return;
-  const label = document.getElementById('seasonLabel').value.trim();
-  const result = await api('/api/season/reset', { method: 'POST', body: JSON.stringify({ label }) });
+  const result = await api('/api/season/reset', { method: 'POST', body: JSON.stringify({}) });
   alert('Neue Saison gestartet. Archiv gespeichert als: ' + result.archive);
+  state.eventTitle = '';
+  document.getElementById('seasonTitle').value = '';
+  document.getElementById('seasonTitleStatus').textContent = '';
+  renderEventTitle();
   state.shooters = [];
   state.disciplines = [];
   loadShooters();
@@ -659,3 +691,4 @@ document.getElementById('resetSeasonBtn').addEventListener('click', async () => 
 
 loadShooters();
 loadDisciplines();
+loadEventTitle();

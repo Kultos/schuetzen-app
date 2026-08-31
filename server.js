@@ -10,6 +10,7 @@ const {
   Shooters,
   Disciplines,
   Results,
+  Season,
   rankingForDiscipline,
   fullExport,
   archiveCurrentSeason,
@@ -223,17 +224,34 @@ async function handleApi(req, res, pathname, query) {
   if (pathname === '/api/export' && method === 'GET') {
     const data = fullExport();
     const body = JSON.stringify(data, null, 2);
+    const title = Season.getTitle();
+    const filenameBase = (title || 'saison-export')
+      .replace(/[^a-zA-Z0-9äöüÄÖÜß_-]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'saison-export';
+    const fallbackName = filenameBase.replace(/[^a-zA-Z0-9_-]/g, '_') + '.json';
+    const encodedName = encodeURIComponent(filenameBase + '.json');
     res.writeHead(200, {
       'Content-Type': 'application/json; charset=utf-8',
-      'Content-Disposition': `attachment; filename="export-${Date.now()}.json"`,
+      'Content-Disposition': `attachment; filename="${fallbackName}"; filename*=UTF-8''${encodedName}`,
     });
     return res.end(body);
+  }
+
+  // ---- Saison-/Eventtitel ----
+  if (pathname === '/api/season' && method === 'GET') {
+    return sendJSON(res, 200, { title: Season.getTitle() });
+  }
+  if (pathname === '/api/season' && method === 'PUT') {
+    const body = await readBody(req);
+    const title = String(body.title || '').trim();
+    if (title.length > 200) return sendError(res, 400, 'Der Titel darf höchstens 200 Zeichen lang sein');
+    return sendJSON(res, 200, { title: Season.setTitle(title) });
   }
 
   // ---- Season reset mit Archiv ----
   if (pathname === '/api/season/reset' && method === 'POST') {
     const body = await readBody(req);
-    const archivePath = archiveCurrentSeason(body.label);
+    const archivePath = archiveCurrentSeason(body.label || Season.getTitle());
     resetSeason();
     return sendJSON(res, 200, { ok: true, archive: path.basename(archivePath) });
   }
