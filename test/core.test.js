@@ -96,6 +96,8 @@ test('Dateneingabe und Datenänderungen funktionieren mit isolierter SQLite-Date
   const berta = Shooters.create({ name: 'Berta', gender: 'w' });
   const anna = Shooters.create({ name: 'Anna', gender: 'w' });
   assert.deepEqual(Shooters.list().map((shooter) => shooter.name), ['Anna', 'Berta']);
+  assert.equal(berta.start_number, 1);
+  assert.equal(anna.start_number, 2);
 
   const gewehr = Disciplines.create({ name: 'Luftgewehr' });
   const pistole = Disciplines.create({ name: 'Pistole' });
@@ -121,6 +123,69 @@ test('Dateneingabe und Datenänderungen funktionieren mit isolierter SQLite-Date
   Shooters.remove(anna.id);
   assert.equal(Shooters.findById(anna.id), undefined);
   assert.deepEqual(Results.listForShooterDiscipline(anna.id, gewehr.id), []);
+});
+
+test('Startnummern werden vorgeschlagen, bleiben eindeutig und können bei Konflikten getauscht werden', async () => {
+  let result = await api('/api/shooters/next-start-number');
+  assert.deepEqual(result.body, { start_number: 1 });
+
+  const anna = (await api('/api/shooters', {
+    method: 'POST',
+    json: { name: 'Anna', gender: 'w', start_number: 7 },
+  })).body;
+  const berta = (await api('/api/shooters', {
+    method: 'POST',
+    json: { name: 'Berta', gender: 'w' },
+  })).body;
+  assert.equal(anna.start_number, 7);
+  assert.equal(berta.start_number, 1);
+
+  result = await api('/api/shooters/next-start-number');
+  assert.equal(result.body.start_number, 2);
+
+  result = await api('/api/shooters', {
+    method: 'POST',
+    json: { name: 'Carla', gender: 'w', start_number: 7 },
+  });
+  assert.equal(result.response.status, 409);
+  assert.equal(result.body.code, 'START_NUMBER_CONFLICT');
+  assert.equal(result.body.conflicting_shooter.id, anna.id);
+  assert.equal(result.body.suggested_start_number, 2);
+
+  result = await api(`/api/shooters/${berta.id}`, {
+    method: 'PUT',
+    json: { name: 'Berta', gender: 'w', start_number: 7 },
+  });
+  assert.equal(result.response.status, 409);
+  assert.equal(result.body.conflicting_shooter.id, anna.id);
+
+  result = await api(`/api/shooters/${berta.id}`, {
+    method: 'PUT',
+    json: { name: 'Berta', gender: 'w', start_number: 7, conflict_resolution: 'swap' },
+  });
+  assert.equal(result.response.status, 200);
+  assert.equal(result.body.start_number, 7);
+  assert.equal(Shooters.findById(anna.id).start_number, 1);
+  assert.deepEqual(Shooters.list().map((shooter) => shooter.start_number).sort((a, b) => a - b), [1, 7]);
+});
+
+test('Startnummern werden exportiert, alte Archive ergänzt und mit der Saison zurückgesetzt', async () => {
+  Shooters.create({ name: 'Exportiert', gender: 'm', start_number: 42 });
+  assert.equal(fullExport().shooters[0].start_number, 42);
+
+  const oldArchive = validateSeasonArchive(archiveFixture());
+  assert.equal(oldArchive.shooters[0].start_number, 1);
+
+  const duplicateArchive = archiveFixture({
+    shooters: [
+      { id: 7, name: 'Anna', gender: 'w', start_number: 3, created_at: '2026-08-30 10:00:00' },
+      { id: 8, name: 'Berta', gender: 'w', start_number: 3, created_at: '2026-08-30 10:01:00' },
+    ],
+  });
+  assert.throws(() => validateSeasonArchive(duplicateArchive), /Startnummer 3 kommt mehrfach vor/);
+
+  await api('/api/season/reset', { method: 'POST', json: {} });
+  assert.equal(Shooters.nextStartNumber(), 1);
 });
 
 test('Rangliste berücksichtigt alle Folgeserien, Anzahl der Serien und Namen', () => {

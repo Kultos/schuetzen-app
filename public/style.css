@@ -65,6 +65,9 @@ h2 { margin-top: 0; color: var(--primary); }
   align-items: center;
 }
 
+#shooterForm { align-items: flex-end; }
+#shooterForm input, #shooterForm select, #shooterForm button { height: 2.35rem; }
+
 input[type="text"], input[type="number"], select {
   padding: 0.5rem 0.6rem;
   border: 1px solid var(--border);
@@ -103,6 +106,11 @@ button.link.danger-text { color: var(--danger); }
 .data-table th { background: #eef2f0; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.02em; }
 
 .hint { color: #55665e; font-size: 0.85rem; }
+
+.start-number-field { display: grid; gap: 0.2rem; color: #55665e; font-size: 0.78rem; }
+.start-number-field input { width: 8rem; }
+.start-number-cell { font-variant-numeric: tabular-nums; font-weight: 700; }
+.edit-start-number { width: 7rem; }
 
 .row-actions button { margin-right: 0.4rem; }
 .row-actions button:last-child { margin-right: 0; }

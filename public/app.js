@@ -8,7 +8,12 @@ async function api(path, options = {}) {
     ...options,
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || 'Fehler bei ' + path);
+  if (!res.ok) {
+    const error = new Error(data.error || 'Fehler bei ' + path);
+    error.status = res.status;
+    Object.assign(error, data);
+    throw error;
+  }
   return data;
 }
 
@@ -124,7 +129,7 @@ function renderDashboardRanking(discipline) {
     const medal = entry.rank <= 3 ? ` rank-${entry.rank}` : '';
     list.appendChild(el('li', { class: `ranking-row${medal}` }, [
       el('span', { class: 'rank-number', text: entry.rank }),
-      el('span', { class: 'rank-name', text: entry.name }),
+      el('span', { class: 'rank-name', text: `Nr. ${entry.start_number} – ${entry.name}` }),
       el('span', { class: 'rank-rounds', text: entry.all_rounds.slice(0, 3).map(formatPoints).join(' · ') }),
       el('strong', { class: 'rank-score', text: formatPoints(entry.best_points) }),
     ]));
@@ -143,7 +148,7 @@ function renderLatestResults(results) {
   for (const result of results.slice(0, 8)) {
     container.appendChild(el('div', { class: 'result-ticker-row' }, [
       el('div', {}, [
-        el('strong', { text: result.shooter_name }),
+        el('strong', { text: `Nr. ${result.start_number} – ${result.shooter_name}` }),
         el('span', { text: `${result.discipline_name} · Durchgang ${result.round_number}` }),
       ]),
       el('strong', { class: 'result-score', text: formatPoints(result.points) }),
@@ -237,10 +242,19 @@ async function loadShooters() {
   for (const s of state.shooters) {
     body.appendChild(s.id === editingShooterId ? renderShooterEditRow(s) : renderShooterRow(s));
   }
+  if (!editingShooterId) await refreshStartNumberSuggestion();
+}
+
+async function refreshStartNumberSuggestion() {
+  const input = document.getElementById('shooterStartNumber');
+  if (document.activeElement === input && input.value) return;
+  const suggestion = await api('/api/shooters/next-start-number');
+  input.value = suggestion.start_number;
 }
 
 function renderShooterRow(s) {
   return el('tr', {}, [
+    el('td', { class: 'start-number-cell', text: s.start_number }),
     el('td', { text: s.name }),
     el('td', { text: s.gender === 'w' ? 'weiblich' : 'männlich' }),
     el('td', { class: 'row-actions' }, [
@@ -266,6 +280,8 @@ function renderShooterRow(s) {
 }
 
 function renderShooterEditRow(s) {
+  const startNumberInput = el('input', { class: 'edit-start-number', type: 'number', min: '1', step: '1', value: s.start_number });
+  startNumberInput.value = s.start_number;
   const nameInput = el('input', { type: 'text', value: s.name });
   nameInput.value = s.name;
   const genderSelect = el('select', {}, [
@@ -276,10 +292,29 @@ function renderShooterEditRow(s) {
 
   const save = async () => {
     const name = nameInput.value.trim();
+    const start_number = Number(startNumberInput.value);
     if (!name) { alert('Name darf nicht leer sein.'); return; }
-    await api(`/api/shooters/${s.id}`, { method: 'PUT', body: JSON.stringify({ name, gender: genderSelect.value }) });
-    editingShooterId = null;
-    loadShooters();
+    if (!Number.isSafeInteger(start_number) || start_number < 1) { alert('Die Startnummer muss eine positive ganze Zahl sein.'); return; }
+    const payload = { name, gender: genderSelect.value, start_number };
+    try {
+      await api(`/api/shooters/${s.id}`, { method: 'PUT', body: JSON.stringify(payload) });
+      editingShooterId = null;
+      loadShooters();
+    } catch (error) {
+      if (error.code !== 'START_NUMBER_CONFLICT') { alert(error.message); return; }
+      const other = error.conflicting_shooter;
+      const shouldSwap = confirm(
+        `Startnummer ${start_number} gehört bereits ${other.name}.\n\n` +
+        `Sollen die Nummern getauscht werden? ${other.name} erhält dann Startnummer ${s.start_number}.`
+      );
+      if (!shouldSwap) return;
+      await api(`/api/shooters/${s.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ ...payload, conflict_resolution: 'swap' }),
+      });
+      editingShooterId = null;
+      loadShooters();
+    }
   };
   const cancel = () => {
     editingShooterId = null;
@@ -288,6 +323,7 @@ function renderShooterEditRow(s) {
   nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') cancel(); });
 
   return el('tr', {}, [
+    el('td', {}, [startNumberInput]),
     el('td', {}, [nameInput]),
     el('td', {}, [genderSelect]),
     el('td', { class: 'row-actions' }, [
@@ -301,10 +337,23 @@ document.getElementById('shooterForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const name = document.getElementById('shooterName').value.trim();
   const gender = document.getElementById('shooterGender').value;
+  const startNumberInput = document.getElementById('shooterStartNumber');
+  const start_number = Number(startNumberInput.value);
   if (!name) return;
-  await api('/api/shooters', { method: 'POST', body: JSON.stringify({ name, gender }) });
-  document.getElementById('shooterName').value = '';
-  loadShooters();
+  if (!Number.isSafeInteger(start_number) || start_number < 1) { alert('Die Startnummer muss eine positive ganze Zahl sein.'); return; }
+  try {
+    await api('/api/shooters', { method: 'POST', body: JSON.stringify({ name, gender, start_number }) });
+    document.getElementById('shooterName').value = '';
+    await loadShooters();
+    document.getElementById('shooterName').focus();
+  } catch (error) {
+    if (error.code === 'START_NUMBER_CONFLICT' && error.suggested_start_number) {
+      startNumberInput.value = error.suggested_start_number;
+      alert(`${error.message}. Als nächste freie Startnummer wurde ${error.suggested_start_number} eingesetzt.`);
+      return;
+    }
+    alert(error.message);
+  }
 });
 
 // ---------------- Disciplines ----------------
@@ -392,7 +441,7 @@ function fillSelect(selectEl, items, valueKey, labelFn) {
 async function refreshResultSelectors() {
   if (!state.shooters.length) await loadShooters();
   if (!state.disciplines.length) await loadDisciplines();
-  fillSelect(document.getElementById('resultShooterSelect'), state.shooters, 'id', (s) => s.name);
+  fillSelect(document.getElementById('resultShooterSelect'), state.shooters, 'id', (s) => `Nr. ${s.start_number} – ${s.name}`);
   fillSelect(document.getElementById('resultDisciplineSelect'), state.disciplines, 'id', (d) => d.name);
   await loadResultsList();
 }
@@ -459,6 +508,7 @@ async function loadRanking() {
     body.appendChild(
       el('tr', {}, [
         el('td', { text: r.rank }),
+        el('td', { text: r.start_number }),
         el('td', { text: r.name }),
         el('td', { text: r.gender === 'w' ? 'weiblich' : 'männlich' }),
         el('td', { text: r.best_points }),
@@ -508,6 +558,10 @@ function normalizeHeaderCell(v) {
   return String(v ?? '').trim().toLowerCase();
 }
 
+function isStartNumberHeader(value) {
+  return /^start\s*[-_.]?\s*(nummer|nr\.?)/.test(normalizeHeaderCell(value));
+}
+
 function isPureNumber(v) {
   const s = String(v ?? '').trim();
   if (s === '') return false;
@@ -547,6 +601,7 @@ function detectStartmeldung(rowsAsArrays, merges) {
     const normalized = row.map(normalizeHeaderCell);
     const genderColIdx = normalized.indexOf('geschlecht');
     const nameColIdx = normalized.findIndex((h) => h.startsWith('name'));
+    const startNumberColIdx = row.findIndex(isStartNumberHeader);
     const hasBesteSerie = normalized.includes('beste serie');
     if (genderColIdx === -1 || nameColIdx === -1 || !hasBesteSerie) continue;
 
@@ -560,7 +615,7 @@ function detectStartmeldung(rowsAsArrays, merges) {
       groups.push({ disciplineName: label, bestCol: c, folgeCol });
     }
     if (groups.length > 0) {
-      return { headerRowIdx: r, nameCol: nameColIdx, genderCol: genderColIdx, groups };
+      return { headerRowIdx: r, nameCol: nameColIdx, genderCol: genderColIdx, startNumberCol: startNumberColIdx, groups };
     }
   }
   return null;
@@ -586,7 +641,7 @@ function parseNumericToken(tok) {
 }
 
 function extractStartmeldungRows(rowsAsArrays, detection) {
-  const { headerRowIdx, nameCol, genderCol, groups } = detection;
+  const { headerRowIdx, nameCol, genderCol, startNumberCol, groups } = detection;
   const outRows = [];
   const disciplineNamesSet = new Set();
   let shooterCount = 0;
@@ -599,6 +654,7 @@ function extractStartmeldungRows(rowsAsArrays, detection) {
     shooterCount++;
     const name = normalizeShooterName(rawName);
     const gender = normalizeGenderCell(row[genderCol]);
+    const start_number = startNumberCol >= 0 ? String(row[startNumberCol] ?? '').trim() : '';
     let hasAnyResult = false;
 
     for (const g of groups) {
@@ -619,7 +675,7 @@ function extractStartmeldungRows(rowsAsArrays, detection) {
       hasAnyResult = true;
       disciplineNamesSet.add(g.disciplineName);
       values.forEach((points, idx) => {
-        outRows.push({ name, gender, discipline: g.disciplineName, round: idx + 1, points });
+        outRows.push({ start_number, name, gender, discipline: g.disciplineName, round: idx + 1, points });
       });
     }
     if (!hasAnyResult) shootersWithoutResult++;
@@ -776,6 +832,7 @@ function renderMappingUI() {
   const grid = document.getElementById('mappingGrid');
   grid.innerHTML = '';
   const fields = [
+    { key: 'start_number', label: 'Startnummer (optional)' },
     { key: 'name', label: 'Name' },
     { key: 'gender', label: 'Geschlecht' },
     { key: 'discipline', label: 'Disziplin' },
@@ -788,7 +845,9 @@ function renderMappingUI() {
       ...importHeaders.map((h) => el('option', { value: h, text: h })),
     ]);
     // Best-effort Vorauswahl
-    const guess = importHeaders.find((h) => h.toLowerCase().includes(f.key === 'discipline' ? 'disz' : f.key === 'gender' ? 'geschl' : f.key === 'round' ? 'durchg' : f.key === 'points' ? 'punkt' : 'name'));
+    const guess = importHeaders.find((h) => f.key === 'start_number'
+      ? isStartNumberHeader(h)
+      : h.toLowerCase().includes(f.key === 'discipline' ? 'disz' : f.key === 'gender' ? 'geschl' : f.key === 'round' ? 'durchg' : f.key === 'points' ? 'punkt' : 'name'));
     if (guess) select.value = guess;
     grid.appendChild(el('div', {}, [el('label', { text: f.label + ': ' }), select]));
   }
@@ -805,6 +864,7 @@ document.getElementById('importSubmitBtn').addEventListener('click', async () =>
     return;
   }
   const rows = importRows.map((r) => ({
+    start_number: mapping.start_number ? r[mapping.start_number] : '',
     name: r[mapping.name] || '',
     gender: mapping.gender ? r[mapping.gender] : '',
     discipline: r[mapping.discipline] || '',

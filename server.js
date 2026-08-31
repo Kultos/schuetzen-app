@@ -43,8 +43,8 @@ function sendJSON(res, status, data) {
   res.end(body);
 }
 
-function sendError(res, status, message) {
-  sendJSON(res, status, { error: message });
+function sendError(res, status, message, details = {}) {
+  sendJSON(res, status, { error: message, ...details });
 }
 
 function normalizedName(value) {
@@ -126,12 +126,25 @@ async function handleApi(req, res, pathname, query) {
   if (pathname === '/api/shooters' && method === 'GET') {
     return sendJSON(res, 200, Shooters.list());
   }
+  if (pathname === '/api/shooters/next-start-number' && method === 'GET') {
+    return sendJSON(res, 200, { start_number: Shooters.nextStartNumber() });
+  }
   if (pathname === '/api/shooters' && method === 'POST') {
     const body = await readBody(req);
     const name = normalizedName(body.name);
     if (!name || !body.gender) return sendError(res, 400, 'name und gender erforderlich');
     if (!['m', 'w'].includes(body.gender)) return sendError(res, 400, "gender muss 'm' oder 'w' sein");
-    return sendJSON(res, 201, Shooters.create({ name, gender: body.gender }));
+    const startNumber = Object.hasOwn(body, 'start_number') ? parsePositiveInteger(body.start_number) : Shooters.nextStartNumber();
+    if (!startNumber) return sendError(res, 400, 'start_number muss eine positive ganze Zahl sein');
+    const conflict = Shooters.findByStartNumber(startNumber);
+    if (conflict) {
+      return sendError(res, 409, `Startnummer ${startNumber} ist bereits vergeben`, {
+        code: 'START_NUMBER_CONFLICT',
+        conflicting_shooter: conflict,
+        suggested_start_number: Shooters.nextStartNumber(),
+      });
+    }
+    return sendJSON(res, 201, Shooters.create({ name, gender: body.gender, start_number: startNumber }));
   }
   let m;
   if ((m = pathname.match(/^\/api\/shooters\/(\d+)$/))) {
@@ -142,8 +155,23 @@ async function handleApi(req, res, pathname, query) {
       if (!name || !['m', 'w'].includes(body.gender)) {
         return sendError(res, 400, 'Gültiger Name und gender erforderlich');
       }
-      if (!Shooters.findById(id)) return sendError(res, 404, 'Schütze nicht gefunden');
-      return sendJSON(res, 200, Shooters.update(id, { name, gender: body.gender }));
+      const current = Shooters.findById(id);
+      if (!current) return sendError(res, 404, 'Schütze nicht gefunden');
+      const startNumber = Object.hasOwn(body, 'start_number') ? parsePositiveInteger(body.start_number) : current.start_number;
+      if (!startNumber) return sendError(res, 400, 'start_number muss eine positive ganze Zahl sein');
+      const conflict = Shooters.findByStartNumber(startNumber);
+      const swapOnConflict = body.conflict_resolution === 'swap';
+      if (conflict && conflict.id !== id && !swapOnConflict) {
+        return sendError(res, 409, `Startnummer ${startNumber} ist bereits an ${conflict.name} vergeben`, {
+          code: 'START_NUMBER_CONFLICT',
+          conflicting_shooter: conflict,
+        });
+      }
+      return sendJSON(res, 200, Shooters.update(
+        id,
+        { name, gender: body.gender, start_number: startNumber },
+        { swapOnConflict }
+      ));
     }
     if (method === 'DELETE') {
       if (!Shooters.findById(id)) return sendError(res, 404, 'Schütze nicht gefunden');
@@ -262,8 +290,20 @@ async function handleApi(req, res, pathname, query) {
 
         let shooter = Shooters.findByName(name);
         if (!shooter) {
-          shooter = Shooters.create({ name, gender });
+          const requestedStartNumber = String(row.start_number ?? '').trim()
+            ? parsePositiveInteger(row.start_number)
+            : Shooters.nextStartNumber();
+          if (!requestedStartNumber) throw new Error('Startnummer ist ungültig');
+          const conflict = Shooters.findByStartNumber(requestedStartNumber);
+          if (conflict) throw new Error(`Startnummer ${requestedStartNumber} ist bereits an ${conflict.name} vergeben`);
+          shooter = Shooters.create({ name, gender, start_number: requestedStartNumber });
           created.shooters++;
+        } else if (String(row.start_number ?? '').trim()) {
+          const requestedStartNumber = parsePositiveInteger(row.start_number);
+          if (!requestedStartNumber) throw new Error('Startnummer ist ungültig');
+          if (shooter.start_number !== requestedStartNumber) {
+            throw new Error(`${name} ist bereits mit Startnummer ${shooter.start_number} erfasst`);
+          }
         }
         let discipline = Disciplines.findByName(disciplineName);
         if (!discipline) {

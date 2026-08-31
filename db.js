@@ -55,6 +55,27 @@ db.exec(`
   );
 `);
 
+// Bestehende Installationen erhalten die Startnummern-Spalte automatisch.
+// Die Vergabe in ID-Reihenfolge bildet für vorhandene Schützen eine stabile,
+// saisonbezogene Nummerierung, ohne dass eine manuelle Migration nötig ist.
+const shooterColumns = db.prepare('PRAGMA table_info(shooters)').all();
+if (!shooterColumns.some((column) => column.name === 'start_number')) {
+  db.exec('ALTER TABLE shooters ADD COLUMN start_number INTEGER');
+}
+
+const usedStartNumbers = new Set(
+  db.prepare('SELECT start_number FROM shooters WHERE start_number IS NOT NULL').all()
+    .map((row) => row.start_number)
+);
+let migrationStartNumber = 1;
+const assignMigratedStartNumber = db.prepare('UPDATE shooters SET start_number = ? WHERE id = ?');
+for (const shooter of db.prepare('SELECT id FROM shooters WHERE start_number IS NULL ORDER BY id').all()) {
+  while (usedStartNumbers.has(migrationStartNumber)) migrationStartNumber++;
+  assignMigratedStartNumber.run(migrationStartNumber, shooter.id);
+  usedStartNumbers.add(migrationStartNumber);
+}
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_shooters_start_number ON shooters(start_number)');
+
 // ---------- Helpers ----------
 
 function all(sql, params = []) {
@@ -96,13 +117,44 @@ const Shooters = {
   list() {
     return all('SELECT * FROM shooters ORDER BY name COLLATE NOCASE');
   },
-  create({ name, gender }) {
-    const res = run('INSERT INTO shooters (name, gender) VALUES (?, ?)', [name, gender]);
+  nextStartNumber() {
+    const used = new Set(all('SELECT start_number FROM shooters').map((row) => row.start_number));
+    let candidate = 1;
+    while (used.has(candidate)) candidate++;
+    return candidate;
+  },
+  create({ name, gender, start_number }) {
+    const number = start_number === undefined ? this.nextStartNumber() : start_number;
+    const res = run('INSERT INTO shooters (name, gender, start_number) VALUES (?, ?, ?)', [name, gender, number]);
     return get('SELECT * FROM shooters WHERE id = ?', [res.lastInsertRowid]);
   },
-  update(id, { name, gender }) {
-    run('UPDATE shooters SET name = ?, gender = ? WHERE id = ?', [name, gender, id]);
-    return get('SELECT * FROM shooters WHERE id = ?', [id]);
+  update(id, { name, gender, start_number }, { swapOnConflict = false } = {}) {
+    const current = this.findById(id);
+    const number = start_number === undefined ? current.start_number : start_number;
+    const conflict = this.findByStartNumber(number);
+
+    if (conflict && conflict.id !== id) {
+      if (!swapOnConflict) {
+        const error = new Error(`Startnummer ${number} ist bereits an ${conflict.name} vergeben`);
+        error.code = 'START_NUMBER_CONFLICT';
+        error.conflictingShooter = conflict;
+        throw error;
+      }
+
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        run('UPDATE shooters SET start_number = NULL WHERE id = ?', [conflict.id]);
+        run('UPDATE shooters SET name = ?, gender = ?, start_number = ? WHERE id = ?', [name, gender, number, id]);
+        run('UPDATE shooters SET start_number = ? WHERE id = ?', [current.start_number, conflict.id]);
+        db.exec('COMMIT');
+      } catch (error) {
+        db.exec('ROLLBACK');
+        throw error;
+      }
+    } else {
+      run('UPDATE shooters SET name = ?, gender = ?, start_number = ? WHERE id = ?', [name, gender, number, id]);
+    }
+    return this.findById(id);
   },
   remove(id) {
     run('DELETE FROM shooters WHERE id = ?', [id]);
@@ -112,6 +164,9 @@ const Shooters = {
   },
   findById(id) {
     return get('SELECT * FROM shooters WHERE id = ?', [id]);
+  },
+  findByStartNumber(startNumber) {
+    return get('SELECT * FROM shooters WHERE start_number = ?', [startNumber]);
   },
 };
 
@@ -185,7 +240,7 @@ const Results = {
  */
 function rankingForDiscipline(disciplineId) {
   const rows = all(
-    `SELECT s.id AS shooter_id, s.name, s.gender, r.points
+    `SELECT s.id AS shooter_id, s.name, s.gender, s.start_number, r.points
      FROM shooters s
      JOIN results r ON r.shooter_id = s.id
      WHERE r.discipline_id = ?`,
@@ -199,6 +254,7 @@ function rankingForDiscipline(disciplineId) {
         shooter_id: row.shooter_id,
         name: row.name,
         gender: row.gender,
+        start_number: row.start_number,
         allPoints: [],
       });
     }
@@ -211,6 +267,7 @@ function rankingForDiscipline(disciplineId) {
       shooter_id: e.shooter_id,
       name: e.name,
       gender: e.gender,
+      start_number: e.start_number,
       best_points: sorted[0],
       rounds_sorted: sorted,
       num_rounds: sorted.length,
@@ -235,6 +292,7 @@ function rankingForDiscipline(disciplineId) {
     shooter_id: e.shooter_id,
     name: e.name,
     gender: e.gender,
+    start_number: e.start_number,
     best_points: e.best_points,
     all_rounds: e.rounds_sorted,
   }));
@@ -254,7 +312,7 @@ function dashboardSnapshot() {
 
   const latestResults = all(
     `SELECT r.id, r.points, r.round_number, r.created_at,
-            s.name AS shooter_name, d.id AS discipline_id, d.name AS discipline_name
+            s.name AS shooter_name, s.start_number, d.id AS discipline_id, d.name AS discipline_name
      FROM results r
      JOIN shooters s ON s.id = r.shooter_id
      JOIN disciplines d ON d.id = r.discipline_id
@@ -321,6 +379,7 @@ function validateSeasonArchive(data) {
   };
 
   const shooterIds = new Set();
+  const startNumbers = new Set();
   const shooters = data.shooters.map((item, index) => {
     if (!item || typeof item !== 'object') throw new Error(`Schütze ${index + 1} ist ungültig`);
     const id = validateId(item.id, `Schütze ${index + 1}: ID`);
@@ -329,8 +388,26 @@ function validateSeasonArchive(data) {
     const name = typeof item.name === 'string' ? item.name.trim() : '';
     if (!name) throw new Error(`Schütze ${index + 1}: Name fehlt`);
     if (!['m', 'w'].includes(item.gender)) throw new Error(`Schütze ${index + 1}: Geschlecht ist ungültig`);
-    return { id, name, gender: item.gender, created_at: validateCreatedAt(item.created_at, `Schütze ${index + 1}`) };
+    let start_number = item.start_number;
+    if (start_number !== undefined && (!Number.isSafeInteger(start_number) || start_number < 1)) {
+      throw new Error(`Schütze ${index + 1}: Startnummer ist ungültig`);
+    }
+    if (start_number !== undefined && startNumbers.has(start_number)) {
+      throw new Error(`Startnummer ${start_number} kommt mehrfach vor`);
+    }
+    if (start_number !== undefined) startNumbers.add(start_number);
+    return { id, name, gender: item.gender, start_number, created_at: validateCreatedAt(item.created_at, `Schütze ${index + 1}`) };
   });
+
+  // Archive aus älteren App-Versionen enthielten noch keine Startnummer.
+  // Solche Schützen bekommen beim Einlesen deterministisch die nächste freie.
+  let nextArchiveStartNumber = 1;
+  for (const shooter of shooters) {
+    if (shooter.start_number !== undefined) continue;
+    while (startNumbers.has(nextArchiveStartNumber)) nextArchiveStartNumber++;
+    shooter.start_number = nextArchiveStartNumber;
+    startNumbers.add(nextArchiveStartNumber);
+  }
 
   const disciplineIds = new Set();
   const disciplineNames = new Set();
@@ -392,7 +469,7 @@ function restoreSeasonArchive(data) {
   try {
     resetSeason();
     const insertShooter = db.prepare(
-      'INSERT INTO shooters (id, name, gender, created_at) VALUES (?, ?, ?, ?)'
+      'INSERT INTO shooters (id, name, gender, start_number, created_at) VALUES (?, ?, ?, ?, ?)'
     );
     const insertDiscipline = db.prepare(
       'INSERT INTO disciplines (id, name, sort_order, created_at) VALUES (?, ?, ?, ?)'
@@ -401,7 +478,7 @@ function restoreSeasonArchive(data) {
       'INSERT INTO results (id, shooter_id, discipline_id, round_number, points, created_at) VALUES (?, ?, ?, ?, ?, ?)'
     );
     for (const shooter of archive.shooters) {
-      insertShooter.run(shooter.id, shooter.name, shooter.gender, shooter.created_at);
+      insertShooter.run(shooter.id, shooter.name, shooter.gender, shooter.start_number, shooter.created_at);
     }
     for (const discipline of archive.disciplines) {
       insertDiscipline.run(discipline.id, discipline.name, discipline.sort_order, discipline.created_at);

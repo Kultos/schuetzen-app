@@ -96,6 +96,9 @@
     <section id="tab-shooters" class="panel active">
       <h2>Schützen</h2>
       <form id="shooterForm" class="inline-form">
+        <label class="start-number-field">Startnummer
+          <input type="number" id="shooterStartNumber" min="1" step="1" required aria-describedby="startNumberHint">
+        </label>
         <input type="text" id="shooterName" placeholder="Name" required>
         <select id="shooterGender">
           <option value="m">männlich</option>
@@ -103,8 +106,9 @@
         </select>
         <button type="submit">Hinzufügen</button>
       </form>
+      <p id="startNumberHint" class="hint">Die nächste freie Startnummer wird vorgeschlagen und kann vor dem Speichern geändert werden.</p>
       <table class="data-table">
-        <thead><tr><th>Name</th><th>Geschlecht</th><th></th></tr></thead>
+        <thead><tr><th>Startnummer</th><th>Name</th><th>Geschlecht</th><th></th></tr></thead>
         <tbody id="shooterTableBody"></tbody>
       </table>
     </section>
@@ -157,7 +161,7 @@
           </div>
         </div>
         <table class="data-table ranking-table">
-          <thead><tr><th>Platz</th><th>Name</th><th>Geschlecht</th><th>Bestes Ergebnis</th><th>Alle Durchgänge</th></tr></thead>
+          <thead><tr><th>Platz</th><th>Startnummer</th><th>Name</th><th>Geschlecht</th><th>Bestes Ergebnis</th><th>Alle Durchgänge</th></tr></thead>
           <tbody id="rankingTableBody"></tbody>
         </table>
       </div>
@@ -166,7 +170,7 @@
     <!-- IMPORT -->
     <section id="tab-import" class="panel">
       <h2>Excel-, CSV- oder JSON-Import</h2>
-      <p class="hint">Exportierte JSON-Saisonarchive werden vollständig wiederhergestellt. Vereins-Vorlagen mit einem "Startmeldung"-Tabellenblatt werden automatisch erkannt. Alternativ: einfache Excel-/CSV-Liste mit Spalten <b>Name</b>, <b>Geschlecht</b> (m/w), <b>Disziplin</b>, <b>Durchgang</b> (optional), <b>Punkte</b>.</p>
+      <p class="hint">Exportierte JSON-Saisonarchive werden vollständig wiederhergestellt. Vereins-Vorlagen mit einem "Startmeldung"-Tabellenblatt werden automatisch erkannt. Alternativ: einfache Excel-/CSV-Liste mit Spalten <b>Startnummer</b> (optional), <b>Name</b>, <b>Geschlecht</b> (m/w), <b>Disziplin</b>, <b>Durchgang</b> (optional), <b>Punkte</b>.</p>
       <input type="file" id="importFile" accept=".json,.csv,.xlsx,.xls,.xlsm">
 
       <div id="importArchiveWrap" style="display:none">

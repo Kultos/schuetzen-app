@@ -25,7 +25,7 @@ Im LAN:  http://192.168.x.x:3000
 
 ## Bedienung
 
-- **Schützen**: Neue Schützen mit Name und Geschlecht anlegen.
+- **Schützen**: Neue Schützen mit Name, Geschlecht und einer eindeutigen Startnummer anlegen. Die nächste freie Nummer wird vorgeschlagen, kann aber vor dem Speichern geändert werden. Bei einer nachträglichen Korrektur auf eine bereits belegte Nummer können die Nummern direkt getauscht werden.
 - **Disziplinen**: Disziplinen für den aktuellen Wettkampf anlegen (beliebig viele, jederzeit erweiterbar).
 - **Ergebnisse erfassen**: Schütze + Disziplin auswählen, dann Durchgänge (Punktzahlen) nacheinander eintragen.
 - **Ranglisten**: Disziplin auswählen → Rangliste wird automatisch berechnet (bester Durchgang zählt, bei Gleichstand entscheidet der nächstbeste Durchgang). Über "Drucken / Als PDF" lässt sich die Liste ausdrucken oder als PDF speichern (im Druckdialog des Browsers "Als PDF speichern" wählen).
@@ -39,7 +39,7 @@ Im LAN:  http://192.168.x.x:3000
 
 ## Neue Saison starten
 
-Da der Wettkampf jährlich neu stattfindet, kann über **"Saison & Netzwerk" → "Neue Saison starten"** die komplette Datenbasis zurückgesetzt werden. **Vor dem Zurücksetzen wird automatisch ein Archiv der bisherigen Saison gespeichert** (im Ordner `data/archive/`), sodass keine Daten verloren gehen. Diese Archive lassen sich in derselben Ansicht auch herunterladen.
+Da der Wettkampf jährlich neu stattfindet, kann über **"Saison & Netzwerk" → "Neue Saison starten"** die komplette Datenbasis einschließlich der Startnummern zurückgesetzt werden. Die Nummerierung beginnt in der neuen Saison wieder bei 1. **Vor dem Zurücksetzen wird automatisch ein Archiv der bisherigen Saison gespeichert** (im Ordner `data/archive/`), sodass keine Daten verloren gehen. Diese Archive lassen sich in derselben Ansicht auch herunterladen.
 
 ## Troubleshooting
 
