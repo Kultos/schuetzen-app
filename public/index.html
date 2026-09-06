@@ -7,19 +7,26 @@
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+  <dialog id="loginDialog"><form id="loginForm">
+    <h2>Verwaltung anmelden</h2><p id="loginHint"></p>
+    <label>Kennwort <input id="adminPassword" type="password" autocomplete="current-password" required minlength="12" maxlength="200"></label>
+    <p id="loginError" role="alert"></p><button>Anmelden</button> <a href="/dashboard">Zum öffentlichen Dashboard</a>
+  </form></dialog>
   <header class="topbar">
     <div class="brand">
-      <img id="clubLogo" src="/logo.png" alt="" onerror="this.style.display='none'">
+      <img id="clubLogo" src="/logo.png" alt="">
       <h1>Schützen-Wettkampf Auswertung</h1>
     </div>
     <nav class="tabs">
       <button data-tab="dashboard" class="tab">Live-Dashboard</button>
       <button data-tab="shooters" class="tab active">Schützen</button>
+      <button data-tab="people" class="tab">Schützenstamm &amp; Historie</button>
       <button data-tab="disciplines" class="tab">Disziplinen</button>
       <button data-tab="results" class="tab">Ergebnisse erfassen</button>
       <button data-tab="rankings" class="tab">Ranglisten</button>
       <button data-tab="import" class="tab">Import</button>
       <button data-tab="season" class="tab">Saison &amp; Netzwerk</button>
+      <button id="logoutBtn" class="tab">Abmelden</button>
     </nav>
   </header>
 
@@ -45,7 +52,7 @@
       <div id="liveDashboard" class="live-dashboard">
         <header class="live-header">
           <div class="live-brand">
-            <img src="/logo.png" alt="" onerror="this.style.display='none'">
+            <img src="/logo.png" alt="">
             <div>
               <p class="live-kicker">Live aus dem Schützenhaus</p>
               <h2 id="dashboardEventTitle">Schützen-Wettkampf</h2>
@@ -94,7 +101,8 @@
 
     <!-- SCHÜTZEN -->
     <section id="tab-shooters" class="panel active">
-      <h2>Schützen</h2>
+      <h2>Teilnehmer des aktuellen Events</h2>
+      <p>Bekannte Schützen im <button type="button" id="openRegistry" class="link">Schützenstamm auswählen</button>. Neue Personen hier anlegen:</p>
       <form id="shooterForm" class="inline-form">
         <label class="start-number-field">Startnummer
           <input type="number" id="shooterStartNumber" min="1" step="1" required aria-describedby="startNumberHint">
@@ -111,6 +119,18 @@
         <thead><tr><th>Startnummer</th><th>Name</th><th>Geschlecht</th><th></th></tr></thead>
         <tbody id="shooterTableBody"></tbody>
       </table>
+    </section>
+
+    <section id="tab-people" class="panel">
+      <h2>Schützenstamm &amp; Historie</h2>
+      <label>Schützen suchen <input id="peopleSearch" type="search" placeholder="Name"></label>
+      <button id="newPersonBtn">Person ohne Event-Anmeldung anlegen</button><p id="peopleStatus" role="status"></p>
+      <div class="table-scroll"><table class="data-table"><thead><tr><th>Name</th><th>Events</th><th>Aktuelle Startnummer</th><th>Einladung</th><th>Aktionen</th></tr></thead><tbody id="peopleRows"></tbody></table></div>
+      <div class="card"><h3>Einladungsadressen exportieren</h3>
+        <label>Frühere Teilnahme <select id="invitationEvent"><option value="">Alle Events</option></select></label>
+        <button id="invitationExport">Empfänger als CSV herunterladen</button>
+        <p class="hint">Nur freigegebene Adressen mit dokumentierter Einwilligung. Vor dem Versand aktuell exportieren; Adressen nicht offen in das An-Feld einer Sammelmail setzen.</p>
+      </div>
     </section>
 
     <!-- DISZIPLINEN -->
@@ -153,7 +173,7 @@
       </div>
       <div id="rankingPrintArea">
         <div class="print-header">
-          <img id="printLogo" src="/logo.png" alt="" onerror="this.style.display='none'">
+          <img id="printLogo" src="/logo.png" alt="">
           <div>
             <h1 id="printEventTitle"></h1>
             <h2 id="printTitle">Rangliste</h2>
@@ -170,15 +190,15 @@
     <!-- IMPORT -->
     <section id="tab-import" class="panel">
       <h2>Excel-, CSV- oder JSON-Import</h2>
-      <p class="hint">Exportierte JSON-Saisonarchive werden vollständig wiederhergestellt. Vereins-Vorlagen mit einem "Startmeldung"-Tabellenblatt werden automatisch erkannt. Alternativ: einfache Excel-/CSV-Liste mit Spalten <b>Startnummer</b> (optional), <b>Name</b>, <b>Geschlecht</b> (m/w), <b>Disziplin</b>, <b>Durchgang</b> (optional), <b>Punkte</b>.</p>
+      <p class="hint">JSON-Archive werden nach Vorschau und Personenzuordnung als zusätzliche historische Events übernommen. Excel/CSV ergänzt das aktive Event: bekannte Personen vorher im Schützenstamm anmelden. Spalten: Startnummer (optional), Name, Geschlecht (m/w), Disziplin, Durchgang (optional), Punkte. Für XLSX wird eine integritätsgeprüfte Bibliothek von cdnjs geladen; CSV bleibt vollständig offline.</p>
       <input type="file" id="importFile" accept=".json,.csv,.xlsx,.xls,.xlsm">
 
       <div id="importArchiveWrap" style="display:none">
         <div class="card">
           <h3>JSON-Saisonarchiv erkannt</h3>
           <p id="archiveImportSummary"></p>
-          <p class="hint">Beim Import wird die aktuelle Saison ersetzt. Falls sie Daten enthält, wird vorher automatisch ein lokales Archiv angelegt.</p>
-          <button id="importArchiveBtn">Saison wiederherstellen</button>
+          <p class="hint">Das Archiv wird als zusätzliches historisches Event importiert. Jahr und Personenzuordnung werden zuerst geprüft; Kontakte bleiben erhalten.</p>
+          <button id="importArchiveBtn">Importvorschau öffnen</button>
         </div>
       </div>
 
@@ -208,6 +228,7 @@
         <p class="hint">Der Titel erscheint auf Ergebnislisten und wird als Dateiname für Exporte und Archive verwendet.</p>
         <form id="seasonTitleForm" class="inline-form">
           <input type="text" id="seasonTitle" maxlength="200" placeholder="z.B. Vereinsschießen 2026">
+          <label>Veranstaltungsjahr <input type="number" id="seasonYear" min="1900" max="2200" required></label>
           <button type="submit">Titel speichern</button>
           <span id="seasonTitleStatus" class="hint" aria-live="polite"></span>
         </form>
@@ -220,13 +241,23 @@
       </div>
       <div class="card">
         <h3>Backup</h3>
-        <button id="exportBtn">Aktuelle Saison exportieren (Download)</button>
+        <button id="exportBtn">Aktuelles Event exportieren (ohne E-Mail)</button>
+        <button id="createBackup">Vollbackup erstellen</button><p id="backupStatus" role="status"></p><ul id="backupList"></ul>
+        <label>Vollbackup wiederherstellen <input type="file" id="restoreFile" accept=".json"></label>
+        <div id="restoreReview" hidden>
+          <p>Der wiederhergestellte Bestand ist gesperrt. Löschungen und Widerrufe abgleichen; betroffene Personen im Schützenstamm bereinigen. Kontakte benötigen danach erneut einen dokumentierten Einwilligungsnachweis.</p>
+          <label>Abgleich dokumentieren <textarea id="reviewNote" minlength="15" maxlength="2000"></textarea></label>
+          <button id="finishReview">Datenschutzabgleich abschließen</button>
+        </div>
       </div>
       <div class="card">
-        <h3>Neue Saison starten</h3>
-        <p class="hint">Vor dem Zurücksetzen wird automatisch ein Archiv mit dem oben gespeicherten Eventtitel angelegt. Danach kann ein neuer Titel vergeben werden.</p>
-        <button id="resetSeasonBtn" class="danger">Neue Saison starten (setzt alle Daten zurück)</button>
+        <h3>Neues Event starten</h3>
+        <p class="hint">Das bisherige Event wird abgeschlossen. Schützenstamm und Historie bleiben erhalten; das neue Event beginnt ohne Teilnehmer, Disziplinen und Ergebnisse.</p>
+        <label>Neuer Titel <input id="nextEventTitle" type="text" maxlength="200"></label>
+        <label>Neues Jahr <input id="nextEventYear" type="number" min="1900" max="2200"></label>
+        <button id="resetSeasonBtn">Bisheriges Event abschließen und neues starten</button>
       </div>
+      <div class="card"><h3>Events und Abschlusswertungen</h3><div id="eventList"></div></div>
       <div class="card">
         <h3>Vorhandene Archive</h3>
         <ul id="archiveList"></ul>
@@ -234,6 +265,8 @@
     </section>
   </main>
 
+  <dialog id="detailDialog"><button type="button" id="closeDetail">Schließen</button><div id="detailContent"></div></dialog>
   <script src="/app.js"></script>
+  <script src="/manage.js"></script>
 </body>
 </html>

@@ -1,11 +1,13 @@
 'use strict';
 
+document.querySelectorAll('img').forEach((image) => image.addEventListener('error', () => { image.hidden = true; }));
+
 // ---------------- Utilities ----------------
 
 async function api(path, options = {}) {
   const res = await fetch(path, {
-    headers: { 'Content-Type': 'application/json' },
     ...options,
+    headers: { 'Content-Type': 'application/json', 'X-Schuetzen-Request':'1', ...(state.eventId ? {'X-Event-Id':String(state.eventId)} : {}), ...options.headers },
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -52,6 +54,8 @@ function renderEventTitle() {
 async function loadEventTitle() {
   const season = await api('/api/season');
   state.eventTitle = season.title || '';
+  state.eventId = season.event.id;
+  document.getElementById('seasonYear').value = season.event.year || '';
   document.getElementById('seasonTitle').value = state.eventTitle;
   renderEventTitle();
 }
@@ -59,6 +63,7 @@ async function loadEventTitle() {
 // ---------------- Tabs ----------------
 
 document.querySelectorAll('.tab').forEach((btn) => {
+  if (!btn.dataset.tab) return;
   btn.addEventListener('click', () => {
     document.querySelectorAll('.tab').forEach((b) => b.classList.remove('active'));
     document.querySelectorAll('.panel').forEach((p) => p.classList.remove('active'));
@@ -69,6 +74,7 @@ document.querySelectorAll('.tab').forEach((btn) => {
     if (btn.dataset.tab === 'results') refreshResultSelectors();
     if (btn.dataset.tab === 'rankings') refreshRankingSelector();
     if (btn.dataset.tab === 'season') refreshSeasonInfo();
+    if (btn.dataset.tab === 'people') loadPeople();
   });
 });
 
@@ -270,7 +276,7 @@ function renderShooterRow(s) {
         class: 'link danger-text',
         text: 'Löschen',
         onclick: async () => {
-          if (!confirm(`"${s.name}" wirklich löschen? Auch alle Ergebnisse dieses Schützen werden entfernt.`)) return;
+          if (!confirm(`"${s.name}" aus dem aktuellen Event entfernen? Dessen aktuelle Ergebnisse werden gelöscht. Schützenstamm und frühere Events bleiben erhalten.`)) return;
           await api(`/api/shooters/${s.id}`, { method: 'DELETE' });
           loadShooters();
         },
@@ -543,6 +549,9 @@ function loadSheetJS() {
     if (window.XLSX) return resolve();
     const script = document.createElement('script');
     script.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+    script.integrity = 'sha512-r22gChDnGvBylk90+2e/ycr3RVrDi8DIOkIGNhJlKfuyQM4tIRAI062MaV8sfjQKYVGjOBaZBOA87z+IhZE9DA==';
+    script.crossOrigin = 'anonymous';
+    script.referrerPolicy = 'no-referrer';
     script.onload = () => resolve();
     script.onerror = () => reject(new Error('Konnte Excel-Bibliothek nicht laden (Internetverbindung nötig für .xlsx-Import). Bitte als CSV exportieren und erneut versuchen.'));
     document.head.appendChild(script);
@@ -777,26 +786,8 @@ document.getElementById('importFile').addEventListener('change', async (e) => {
   renderMappingUI();
 });
 
-document.getElementById('importArchiveBtn').addEventListener('click', async () => {
-  if (!detectedArchive) return;
-  if (!confirm('Die aktuelle Saison wird vollständig durch dieses JSON-Archiv ersetzt. Fortfahren?')) return;
-  const resultEl = document.getElementById('importResult');
-  resultEl.textContent = 'Saisonarchiv wird wiederhergestellt...';
-  try {
-    const result = await api('/api/import/archive', {
-      method: 'POST',
-      body: JSON.stringify({ archive: detectedArchive }),
-    });
-    resultEl.textContent =
-      `Saison „${result.event_title || 'ohne Titel'}“ wiederhergestellt: ${result.restored.shooters} Schütze(n), ` +
-      `${result.restored.disciplines} Disziplin(en), ${result.restored.results} Ergebnis(se).` +
-      (result.backup ? `\nDie vorherige Saison wurde als ${result.backup} archiviert.` : '');
-    detectedArchive = null;
-    document.getElementById('importArchiveWrap').style.display = 'none';
-    await Promise.all([loadShooters(), loadDisciplines(), loadEventTitle()]);
-  } catch (err) {
-    resultEl.textContent = 'Fehler beim JSON-Import: ' + err.message;
-  }
+document.getElementById('importArchiveBtn').addEventListener('click', () => {
+  if (detectedArchive) openArchiveImport(detectedArchive);
 });
 
 function showDetectedPreview(sheetName, extraction, rowsAsArrays, detection) {
@@ -894,6 +885,8 @@ async function submitImportRows(rows) {
 // ---------------- Season & Network ----------------
 
 async function refreshSeasonInfo() {
+  const backupState = await api('/api/backups');
+  if (backupState.privacy_review) { await refreshManagement(); return; }
   await loadEventTitle();
   const info = await api('/api/info');
   const ipList = document.getElementById('lanIpList');
@@ -902,10 +895,11 @@ async function refreshSeasonInfo() {
     ipList.appendChild(el('li', { text: 'Keine LAN-Adresse gefunden (nur lokal am Laptop erreichbar).' }));
   }
   for (const ip of info.lan_ips) {
-    const address = `http://${ip}:${info.port}`;
+    const address = `${window.location.protocol}//${ip}:${info.port}`;
     ipList.appendChild(el('li', {}, [el('a', { href: address, target: '_blank', text: address })]));
   }
   await refreshArchiveList();
+  await refreshManagement();
 }
 
 async function refreshArchiveList() {
@@ -931,7 +925,8 @@ document.getElementById('seasonTitleForm').addEventListener('submit', async (e) 
   const status = document.getElementById('seasonTitleStatus');
   const title = document.getElementById('seasonTitle').value.trim();
   try {
-    const season = await api('/api/season', { method: 'PUT', body: JSON.stringify({ title }) });
+    const year = Number(document.getElementById('seasonYear').value);
+    const season = await api('/api/season', { method: 'PUT', body: JSON.stringify({ title, year }) });
     state.eventTitle = season.title;
     renderEventTitle();
     status.textContent = 'Gespeichert.';
@@ -940,28 +935,6 @@ document.getElementById('seasonTitleForm').addEventListener('submit', async (e) 
   }
 });
 
-document.getElementById('resetSeasonBtn').addEventListener('click', async () => {
-  if (!confirm('Wirklich eine neue Saison starten? Alle aktuellen Schützen, Disziplinen und Ergebnisse werden gelöscht (nach automatischem Archiv-Export).')) return;
-  const result = await api('/api/season/reset', { method: 'POST', body: JSON.stringify({}) });
-  alert('Neue Saison gestartet. Archiv gespeichert als: ' + result.archive);
-  state.eventTitle = '';
-  document.getElementById('seasonTitle').value = '';
-  document.getElementById('seasonTitleStatus').textContent = '';
-  renderEventTitle();
-  state.shooters = [];
-  state.disciplines = [];
-  loadShooters();
-  loadDisciplines();
-  refreshArchiveList();
-});
+document.getElementById('resetSeasonBtn').addEventListener('click', () => startNextEvent());
 
-// ---------------- Init ----------------
-
-loadShooters();
-loadDisciplines();
-loadEventTitle();
-
-if (window.location.pathname === '/dashboard') {
-  document.body.classList.add('tv-mode');
-  activateTab('dashboard');
-}
+// Startup and authentication are handled by manage.js.

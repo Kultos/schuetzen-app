@@ -4,6 +4,12 @@ const http = require('node:http');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
+const https = require('node:https');
+const Auth = require('./auth');
+const Backups = require('./backups');
+const { Contacts } = require('./privacy');
+const { People, Events, all, setting, transaction } = require('./db');
+const Archives = require('./archives');
 
 const {
   Shooters,
@@ -68,7 +74,7 @@ function readBody(req) {
     let data = '';
     req.on('data', (chunk) => {
       data += chunk;
-      if (data.length > 20 * 1024 * 1024) {
+      if (data.length > 150 * 1024 * 1024) {
         reject(new Error('Payload zu gross'));
         req.destroy();
       }
@@ -87,7 +93,7 @@ function readBody(req) {
 
 function serveStatic(req, res, pathname) {
   let filePath = path.join(PUBLIC_DIR, pathname === '/' ? 'index.html' : pathname);
-  if (!filePath.startsWith(PUBLIC_DIR)) {
+  if (!filePath.startsWith(PUBLIC_DIR + path.sep) && filePath !== path.join(PUBLIC_DIR,'index.html')) {
     return sendError(res, 403, 'Verboten');
   }
   fs.readFile(filePath, (err, content) => {
@@ -121,6 +127,76 @@ function getLanIPs() {
 
 async function handleApi(req, res, pathname, query) {
   const method = req.method;
+  res.setHeader('Cache-Control','no-store');
+  if(!Auth.validateWrite(req)) return sendError(res,403,'Ungültige Anfrage');
+  if(pathname === '/api/auth/status' && method === 'GET') return sendJSON(res,200,{configured:Auth.configured(),authenticated:!!Auth.session(req),local:Auth.local(req),secure:Auth.protectedTransport(req)});
+  if(pathname === '/api/auth/setup' && method === 'POST') {
+    const body=await readBody(req);
+    try {Auth.setup(req,body.password);Auth.login(req,res,body.password);} catch(e) {return sendError(res,400,e.message);}
+    return sendJSON(res,200,{ok:true});
+  }
+  if(pathname === '/api/auth/login' && method === 'POST') {
+    const body=await readBody(req);
+    try {Auth.login(req,res,body.password);} catch(e) {return sendError(res,401,e.message);}
+    return sendJSON(res,200,{ok:true});
+  }
+  if(pathname === '/api/auth/logout' && method === 'POST') {Auth.logout(req,res);return sendJSON(res,200,{ok:true});}
+  if(pathname === '/api/dashboard' && method === 'GET') {
+    if(setting('privacy_review')==='1') return sendError(res,503,'Datenbestand wird nach Wiederherstellung geprüft');
+    return sendJSON(res,200,dashboardSnapshot());
+  }
+  if(!Auth.protectedTransport(req)) return sendError(res,403,'Verwaltung im LAN erfordert HTTPS. Direkt am Server ist localhost verfügbar.');
+  if(!Auth.session(req)) return sendError(res,401,'Bitte anmelden');
+  const eventWrite=method!=='GET' && (/^\/api\/(shooters|disciplines|results)(\/|$)/.test(pathname) || pathname==='/api/import' || pathname==='/api/season' || pathname==='/api/season/reset' || /^\/api\/people\/\d+\/register$/.test(pathname));
+  if(eventWrite && Number(req.headers['x-event-id'])!==Events.active().id) return sendError(res,409,'Das aktive Event hat sich geändert. Bitte die Seite neu laden.');
+  const reviewAllowed=['/api/backups','/api/backup/preview','/api/backup/restore','/api/privacy/review','/api/people'].includes(pathname) || /^\/api\/backups\//.test(pathname) || /^\/api\/people\/\d+(\/contact|\/erase|\/history)?$/.test(pathname);
+  if(setting('privacy_review')==='1' && !reviewAllowed) return sendError(res,423,'Datenschutzabgleich nach Restore erforderlich');
+  let extra;
+  if(pathname==='/api/people' && method==='GET') return sendJSON(res,200,People.list(query.search));
+  if(pathname==='/api/people' && method==='POST') return sendJSON(res,201,People.create(await readBody(req)));
+  if((extra=pathname.match(/^\/api\/people\/(\d+)$/)) && method==='PUT') return sendJSON(res,200,People.update(Number(extra[1]),await readBody(req)));
+  if((extra=pathname.match(/^\/api\/people\/(\d+)\/history$/)) && method==='GET') return sendJSON(res,200,People.history(Number(extra[1])));
+  if((extra=pathname.match(/^\/api\/people\/(\d+)\/register$/)) && method==='POST') {
+    const b=await readBody(req);return sendJSON(res,201,Shooters.register(Number(extra[1]),b.start_number));
+  }
+  if((extra=pathname.match(/^\/api\/people\/(\d+)\/archive$/)) && method==='POST') {
+    const b=await readBody(req);People.archive(Number(extra[1]),b.archived===true);return sendJSON(res,200,{ok:true});
+  }
+  if((extra=pathname.match(/^\/api\/people\/(\d+)\/contact$/))) {
+    const id=Number(extra[1]);
+    if(method==='GET') return sendJSON(res,200,Contacts.get(id));
+    if(method==='PUT') return sendJSON(res,200,Contacts.save(id,await readBody(req)));
+    if(method==='DELETE') {Contacts.revoke(id);return sendJSON(res,200,{ok:true});}
+  }
+  if((extra=pathname.match(/^\/api\/people\/(\d+)\/erase$/)) && method==='POST') {
+    const b=await readBody(req);if(b.confirm!==true) return sendError(res,400,'Löschbestätigung fehlt');
+    Contacts.erase(Number(extra[1]));return sendJSON(res,200,{ok:true});
+  }
+  if(pathname==='/api/invitations' && method==='GET') return sendJSON(res,200,Contacts.invitations(query.event_id ? Number(query.event_id) : null));
+  if(pathname==='/api/events' && method==='GET') return sendJSON(res,200,Events.list());
+  if((extra=pathname.match(/^\/api\/events\/(\d+)$/))) {
+    const id=Number(extra[1]);
+    if(method==='GET') return sendJSON(res,200,{...fullExport(id),closures:all('SELECT * FROM closures WHERE event_id=? ORDER BY revision',[id])});
+    if(method==='PUT') return sendJSON(res,200,Events.metadata(id,await readBody(req)));
+  }
+  if((extra=pathname.match(/^\/api\/events\/(\d+)\/correction$/)) && method==='POST') {
+    const b=await readBody(req);return sendJSON(res,200,b.finish ? Events.finishCorrection(Number(extra[1])) : Events.beginCorrection(Number(extra[1]),b.reason));
+  }
+  if((extra=pathname.match(/^\/api\/events\/(\d+)\/results\/(\d+)$/)) && method==='PUT') {
+    const b=await readBody(req);Results.correct(Number(extra[1]),Number(extra[2]),b.points);return sendJSON(res,200,{ok:true});
+  }
+  if(pathname==='/api/backups' && method==='GET') return sendJSON(res,200,Backups.status());
+  if(pathname==='/api/backups' && method==='POST') return sendJSON(res,201,{name:Backups.create()});
+  if((extra=pathname.match(/^\/api\/backups\/([^/]+)$/)) && method==='GET') {
+    res.setHeader('Content-Disposition','attachment; filename="systembackup.json"');return sendJSON(res,200,Backups.bundle(extra[1]));
+  }
+  if(pathname==='/api/backup/preview' && method==='POST') return sendJSON(res,200,Backups.inspect((await readBody(req)).backup));
+  if(pathname==='/api/backup/restore' && method==='POST') {
+    const b=await readBody(req);if(b.confirm!==true) return sendError(res,400,'Restore-Bestätigung fehlt');
+    const restored=Backups.restore(b.backup);Auth.clearSessions();return sendJSON(res,200,restored);
+  }
+  if(pathname==='/api/privacy/review' && method==='POST') {Backups.reviewed((await readBody(req)).note);return sendJSON(res,200,{ok:true});}
+  if(pathname==='/api/import/preview' && method==='POST') return sendJSON(res,200,Archives.preview((await readBody(req)).archive));
 
   // ---- Shooters ----
   if (pathname === '/api/shooters' && method === 'GET') {
@@ -288,8 +364,11 @@ async function handleApi(req, res, pathname, query) {
         }
         const gender = genderRaw.startsWith('w') || genderRaw.startsWith('f') ? 'w' : 'm';
 
-        let shooter = Shooters.findByName(name);
+        const number=String(row.start_number??'').trim() ? parsePositiveInteger(row.start_number) : null;
+        let shooter = number ? Shooters.findByStartNumber(number) : Shooters.findByName(name);
+        if(shooter && shooter.name.toLocaleLowerCase('de')!==name.toLocaleLowerCase('de')) throw new Error('Startnummer gehört zu einem anderen Teilnehmer');
         if (!shooter) {
+          if(People.list(name).some(p=>p.name.toLocaleLowerCase('de')===name.toLocaleLowerCase('de'))) throw new Error('Name ist im Schützenstamm vorhanden. Person zuerst ausdrücklich für das Event anmelden.');
           const requestedStartNumber = String(row.start_number ?? '').trim()
             ? parsePositiveInteger(row.start_number)
             : Shooters.nextStartNumber();
@@ -327,7 +406,7 @@ async function handleApi(req, res, pathname, query) {
     } catch (error) {
       return sendError(res, 400, error.message);
     }
-    return sendJSON(res, 200, restoreSeasonArchive(body.archive));
+    return sendJSON(res, 200, restoreSeasonArchive(body.archive,body));
   }
 
   // ---- Export (aktuelle Saison als JSON) ----
@@ -349,28 +428,27 @@ async function handleApi(req, res, pathname, query) {
 
   // ---- Saison-/Eventtitel ----
   if (pathname === '/api/season' && method === 'GET') {
-    return sendJSON(res, 200, { title: Season.getTitle() });
+    return sendJSON(res, 200, { title: Season.getTitle(), event: Events.active() });
   }
   if (pathname === '/api/season' && method === 'PUT') {
     const body = await readBody(req);
     const title = String(body.title || '').trim();
     if (title.length > 200) return sendError(res, 400, 'Der Titel darf höchstens 200 Zeichen lang sein');
-    return sendJSON(res, 200, { title: Season.setTitle(title) });
+    const event=Events.metadata(Events.active().id,{title,year:body.year});
+    return sendJSON(res, 200, { title:event.title,event });
   }
 
   // ---- Season reset mit Archiv ----
   if (pathname === '/api/season/reset' && method === 'POST') {
     const body = await readBody(req);
-    const archivePath = archiveCurrentSeason(body.label || Season.getTitle());
-    resetSeason();
-    return sendJSON(res, 200, { ok: true, archive: path.basename(archivePath) });
+    return sendJSON(res, 200, resetSeason(body));
   }
   if (pathname === '/api/season/archives' && method === 'GET') {
     return sendJSON(res, 200, listArchives());
   }
   if ((m = pathname.match(/^\/api\/season\/archives\/([^/]+)$/)) && method === 'GET') {
     const fname = decodeURIComponent(m[1]);
-    if (fname.includes('..') || fname.includes('/')) return sendError(res, 400, 'Ungueltiger Dateiname');
+    if (!listArchives().includes(fname) || path.basename(fname)!==fname) return sendError(res, 400, 'Ungueltiger Dateiname');
     const filePath = path.join(ARCHIVE_DIR, fname);
     if (!fs.existsSync(filePath)) return sendError(res, 404, 'Nicht gefunden');
     const content = fs.readFileSync(filePath);
@@ -383,13 +461,18 @@ async function handleApi(req, res, pathname, query) {
 
   // ---- Info (IP/Port fuer LAN-Zugriff) ----
   if (pathname === '/api/info' && method === 'GET') {
-    return sendJSON(res, 200, { port: PORT, lan_ips: getLanIPs() });
+    return sendJSON(res, 200, { port: server.address()?.port || PORT, lan_ips: getLanIPs() });
   }
 
   return sendError(res, 404, 'Unbekannter Endpoint');
 }
 
-const server = http.createServer(async (req, res) => {
+const handler = async (req, res) => {
+  res.setHeader('X-Content-Type-Options','nosniff');
+  res.setHeader('Referrer-Policy','same-origin');
+  res.setHeader('X-Frame-Options','DENY');
+  res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
+  try {
   const parsed = new URL(req.url, 'http://localhost');
   const pathname = decodeURIComponent(parsed.pathname);
   const query = Object.fromEntries(parsed.searchParams);
@@ -398,20 +481,30 @@ const server = http.createServer(async (req, res) => {
     try {
       await handleApi(req, res, pathname, query);
     } catch (e) {
-      sendError(res, 500, e.message || 'Serverfehler');
+      if (Number.isInteger(e.status)) sendError(res,e.status,e.message);
+      else {
+        console.error(e);
+        sendError(res,500,'Interner Serverfehler');
+      }
     }
     return;
   }
 
   serveStatic(req, res, pathname);
-});
+  } catch { sendError(res,400,'Ungültige Anfrage'); }
+};
+const server = process.env.SCHUETZEN_TLS_CERT && process.env.SCHUETZEN_TLS_KEY
+  ? https.createServer({cert:fs.readFileSync(process.env.SCHUETZEN_TLS_CERT),key:fs.readFileSync(process.env.SCHUETZEN_TLS_KEY)},handler)
+  : http.createServer(handler);
 
 if (require.main === module) {
+  Backups.startTimer();
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`Schuetzen-Wettkampf-Server laeuft auf Port ${PORT}`);
-    console.log(`Lokal:   http://localhost:${PORT}`);
+    const protocol=process.env.SCHUETZEN_TLS_CERT ? 'https' : 'http';
+    console.log(`Lokal:   ${protocol}://localhost:${PORT}`);
     for (const ip of getLanIPs()) {
-      console.log(`Im LAN:  http://${ip}:${PORT}`);
+      console.log(`Im LAN:  ${protocol}://${ip}:${PORT}`);
     }
   });
 }

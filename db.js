@@ -1,545 +1,242 @@
 'use strict';
-
-const { DatabaseSync } = require('node:sqlite');
-const path = require('node:path');
-const fs = require('node:fs');
-
-// Tests can redirect all persistent state to a temporary directory. In normal
-// operation the environment variable is unset and the existing data directory
-// continues to be used.
-const DATA_DIR = process.env.SCHUETZEN_DATA_DIR
-  ? path.resolve(process.env.SCHUETZEN_DATA_DIR)
-  : path.join(__dirname, 'data');
-const ARCHIVE_DIR = path.join(DATA_DIR, 'archive');
-const DB_PATH = path.join(DATA_DIR, 'wettkampf.db');
-
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-if (!fs.existsSync(ARCHIVE_DIR)) fs.mkdirSync(ARCHIVE_DIR, { recursive: true });
-
-const db = new DatabaseSync(DB_PATH);
-
-// SQLite does not enable foreign-key actions by default. The application relies
-// on ON DELETE CASCADE when a shooter or discipline is removed.
-db.exec('PRAGMA foreign_keys = ON');
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS shooters (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    gender TEXT NOT NULL CHECK (gender IN ('m', 'w')),
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-
-  CREATE TABLE IF NOT EXISTS disciplines (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL UNIQUE,
-    sort_order INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-
-  CREATE TABLE IF NOT EXISTS results (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    shooter_id INTEGER NOT NULL REFERENCES shooters(id) ON DELETE CASCADE,
-    discipline_id INTEGER NOT NULL REFERENCES disciplines(id) ON DELETE CASCADE,
-    round_number INTEGER NOT NULL,
-    points REAL NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_results_shooter_discipline
-    ON results(shooter_id, discipline_id);
-
-  CREATE TABLE IF NOT EXISTS settings (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-  );
-`);
-
-// Bestehende Installationen erhalten die Startnummern-Spalte automatisch.
-// Die Vergabe in ID-Reihenfolge bildet für vorhandene Schützen eine stabile,
-// saisonbezogene Nummerierung, ohne dass eine manuelle Migration nötig ist.
-const shooterColumns = db.prepare('PRAGMA table_info(shooters)').all();
-if (!shooterColumns.some((column) => column.name === 'start_number')) {
-  db.exec('ALTER TABLE shooters ADD COLUMN start_number INTEGER');
+const { randomUUID } = require('node:crypto');
+const store = require('./storage');
+const { db, all, get, run, transaction } = store;
+function fail(message, status = 400) { const e = new Error(message); e.status = status; throw e; }
+const positive = (v, label) => { if (!Number.isSafeInteger(v) || v < 1) fail(label + ' ist ungültig'); return v; };
+function person(data) {
+  const name = typeof data.name === 'string' ? data.name.trim() : '';
+  if (!name || name.length > 200 || !['m','w'].includes(data.gender)) fail('Gültiger Name (max. 200 Zeichen) und Geschlecht erforderlich');
+  return { name, gender: data.gender };
 }
-
-const usedStartNumbers = new Set(
-  db.prepare('SELECT start_number FROM shooters WHERE start_number IS NOT NULL').all()
-    .map((row) => row.start_number)
-);
-let migrationStartNumber = 1;
-const assignMigratedStartNumber = db.prepare('UPDATE shooters SET start_number = ? WHERE id = ?');
-for (const shooter of db.prepare('SELECT id FROM shooters WHERE start_number IS NULL ORDER BY id').all()) {
-  while (usedStartNumbers.has(migrationStartNumber)) migrationStartNumber++;
-  assignMigratedStartNumber.run(migrationStartNumber, shooter.id);
-  usedStartNumbers.add(migrationStartNumber);
-}
-db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_shooters_start_number ON shooters(start_number)');
-
-// ---------- Helpers ----------
-
-function all(sql, params = []) {
-  const stmt = db.prepare(sql);
-  return stmt.all(...params);
-}
-
-function get(sql, params = []) {
-  const stmt = db.prepare(sql);
-  return stmt.get(...params);
-}
-
-function run(sql, params = []) {
-  const stmt = db.prepare(sql);
-  return stmt.run(...params);
-}
-
-// ---------- Settings ----------
-
+const Events = {
+  active() { return get("SELECT * FROM events WHERE status='active'"); },
+  list() { return all('SELECT * FROM events ORDER BY year DESC,id DESC'); },
+  get(id) { const e=get('SELECT * FROM events WHERE id=?',[id]); if(!e) fail('Event nicht gefunden',404); return e; },
+  writable(id) { const e=this.get(id); if(!['active','correction'].includes(e.status)) fail('Abgeschlossenes Event ist schreibgeschützt',409); return e; },
+  metadata(id, data) {
+    this.writable(id);
+    const title=String(data.title || '').trim();
+    if(title.length>200) fail('Der Titel darf höchstens 200 Zeichen lang sein');
+    const year=data.year === undefined ? this.get(id).year : Number(data.year);
+    if(year !== null && (!Number.isInteger(year) || year<1900 || year>2200)) fail('Veranstaltungsjahr ist ungültig');
+    run('UPDATE events SET title=?,year=? WHERE id=?',[title,year,id]);
+    return this.get(id);
+  },
+  close(id, reason='Eventabschluss') {
+    const e=this.writable(id);
+    if(!e.year) fail('Bitte zuerst das Veranstaltungsjahr festlegen');
+    const revision=e.revision+1;
+    for(const d of Disciplines.list(id)) {
+      for(const row of rankingForDiscipline(d.id, true)) {
+        run('INSERT INTO placements(event_id,revision,participant_id,discipline_id,rank,best_points,rounds) VALUES (?,?,?,?,?,?,?)',
+          [id,revision,row.participant_id,d.id,row.rank,row.best_points,JSON.stringify(row.all_rounds)]);
+      }
+    }
+    run('INSERT INTO closures(event_id,revision,reason) VALUES (?,?,?)',[id,revision,reason]);
+    run("UPDATE events SET status='closed',revision=?,closed_at=datetime('now'),correction_reason=NULL WHERE id=?",[revision,id]);
+  },
+  start({ title, year, previous_event_id }) {
+    const old=this.active();
+    if(!old || old.id !== previous_event_id) fail('Das aktive Event hat sich geändert. Bitte Ansicht aktualisieren.',409);
+    const y=Number(year);
+    if(!String(title || '').trim() || String(title).length>200 || !Number.isInteger(y) || y<1900 || y>2200) fail('Titel und gültiges Jahr für das neue Event erforderlich');
+    if(!old.year) fail('Bitte das Jahr des bisherigen Events speichern');
+    const backup=require('./backups').create('vor-eventwechsel');
+    const next=transaction(()=>{
+      this.close(old.id);
+      const id=Number(run("INSERT INTO events(uuid,title,year,status) VALUES (?,?,?,'active')",[randomUUID(),title.trim(),y]).lastInsertRowid);
+      return this.get(id);
+    });
+    const warnings=[]; let archive=null;
+    try { archive=require('./archives').archiveCurrentSeason(undefined,old.id); } catch { warnings.push('Event geschlossen; Event-Export fehlgeschlagen. Erneut exportieren.'); }
+    try { require('./backups').create('nach-eventwechsel'); } catch { warnings.push('Abschlusssicherung fehlgeschlagen. Bitte Vollbackup erneut erstellen.'); }
+    return { ok:true, event:next, backup, archive:archive ? require('node:path').basename(archive) : null, warnings };
+  },
+  beginCorrection(id, reason) {
+    const e=this.get(id);
+    if(e.status!=='closed' || typeof reason!=='string' || !reason.trim() || reason.length>500) fail('Abgeschlossenes Event und Korrekturbegründung erforderlich');
+    require('./backups').create('vor-korrektur');
+    run("UPDATE events SET status='correction',correction_reason=? WHERE id=?",[reason.trim(),id]);
+    return this.get(id);
+  },
+  finishCorrection(id) {
+    const e=this.get(id);
+    if(e.status!=='correction') fail('Kein Korrekturmodus aktiv');
+    transaction(()=>this.close(id,e.correction_reason));
+    const warnings=[];
+    try { require('./archives').archiveCurrentSeason(undefined,id); }
+    catch { warnings.push('Korrektur gespeichert; Event-Export fehlgeschlagen.'); }
+    try { require('./backups').create('nach-korrektur'); }
+    catch { warnings.push('Korrektur gespeichert; Abschlusssicherung fehlgeschlagen.'); }
+    return {...this.get(id),warnings};
+  }
+};
+const current = () => Events.active().id;
 const Season = {
-  getTitle() {
-    const row = get("SELECT value FROM settings WHERE key = 'event_title'");
-    return row ? row.value : '';
-  },
-  setTitle(title) {
-    const value = String(title || '').trim();
-    run(
-      `INSERT INTO settings (key, value) VALUES ('event_title', ?)
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-      [value]
-    );
-    return value;
-  },
+  getTitle() { return Events.active().title; },
+  setTitle(title) { return Events.metadata(current(),{title}).title; }
 };
 
-// ---------- Shooters ----------
-
+const People = {
+  list(search='') {
+    return all(`SELECT s.id,s.uuid,s.name,s.gender,s.archived_at,s.updated_at,
+      p.start_number, EXISTS(SELECT 1 FROM contacts c WHERE c.shooter_id=s.id AND c.status='granted') AS contact_allowed,
+      (SELECT COUNT(*) FROM participants h WHERE h.shooter_id=s.id) AS event_count
+      FROM shooters s LEFT JOIN participants p ON p.shooter_id=s.id AND p.event_id=?
+      WHERE s.name LIKE ? ORDER BY s.name COLLATE NOCASE,s.id`,[current(),'%'+String(search).slice(0,200)+'%']);
+  },
+  get(id) { const s=get('SELECT * FROM shooters WHERE id=?',[id]); if(!s) fail('Schütze nicht gefunden',404); return s; },
+  create(data) {
+    const s=person(data);
+    const id=Number(run('INSERT INTO shooters(uuid,name,gender) VALUES (?,?,?)',[randomUUID(),s.name,s.gender]).lastInsertRowid);
+    return this.get(id);
+  },
+  update(id,data) {
+    const existing=this.get(id);
+    if(require('./privacy').erased(existing.uuid)) fail('Gelöschte Person darf nicht reaktiviert werden');
+    const s=person(data);
+    run("UPDATE shooters SET name=?,gender=?,updated_at=datetime('now') WHERE id=?",[s.name,s.gender,id]);
+    run('UPDATE participants SET name=?,gender=? WHERE shooter_id=? AND event_id=?',[s.name,s.gender,id,current()]);
+    return this.get(id);
+  },
+  archive(id, archived) {
+    const s=this.get(id);
+    if(!archived && require('./privacy').erased(s.uuid)) fail('Gelöschte Person darf nicht reaktiviert werden');
+    run("UPDATE shooters SET archived_at=?,updated_at=datetime('now') WHERE id=?",[archived ? new Date().toISOString() : null,id]);
+  },
+  history(id) {
+    this.get(id);
+    return all(`SELECT e.*,p.id AS participant_id,p.start_number,p.name AS historical_name,
+      (SELECT COUNT(*) FROM results r WHERE r.participant_id=p.id) AS result_count
+      FROM participants p JOIN events e ON e.id=p.event_id WHERE p.shooter_id=? ORDER BY e.year DESC,e.id DESC`,[id]).map(e=>({
+        ...e, placements: all(`SELECT f.rank,f.best_points,d.name AS discipline,f.revision
+          FROM placements f JOIN disciplines d ON d.id=f.discipline_id
+          WHERE f.participant_id=? AND f.revision=? ORDER BY d.sort_order,d.id`,[e.participant_id,e.revision])
+      }));
+  }
+};
+const shooterSelect = `SELECT s.id,s.uuid,p.name,p.gender,p.start_number,p.created_at,p.id AS participant_id,p.event_id
+  FROM participants p JOIN shooters s ON s.id=p.shooter_id`;
 const Shooters = {
-  list() {
-    return all('SELECT * FROM shooters ORDER BY name COLLATE NOCASE');
-  },
+  list(eventId=current()) { return all(shooterSelect+' WHERE p.event_id=? ORDER BY p.name COLLATE NOCASE,p.id',[eventId]); },
   nextStartNumber() {
-    const used = new Set(all('SELECT start_number FROM shooters').map((row) => row.start_number));
-    let candidate = 1;
-    while (used.has(candidate)) candidate++;
-    return candidate;
+    const used=new Set(this.list().map(s=>s.start_number)); let n=1; while(used.has(n)) n++; return n;
   },
-  create({ name, gender, start_number }) {
-    const number = start_number === undefined ? this.nextStartNumber() : start_number;
-    const res = run('INSERT INTO shooters (name, gender, start_number) VALUES (?, ?, ?)', [name, gender, number]);
-    return get('SELECT * FROM shooters WHERE id = ?', [res.lastInsertRowid]);
+  findById(id) { return get(shooterSelect+' WHERE s.id=? AND p.event_id=?',[id,current()]); },
+  findByName(name) {
+    const matches=all(shooterSelect+' WHERE p.name=? COLLATE NOCASE AND p.event_id=?',[name,current()]);
+    if(matches.length>1) fail('Mehrere Teilnehmer mit diesem Namen. Bitte Startnummer verwenden.');
+    return matches[0];
   },
-  update(id, { name, gender, start_number }, { swapOnConflict = false } = {}) {
-    const current = this.findById(id);
-    const number = start_number === undefined ? current.start_number : start_number;
-    const conflict = this.findByStartNumber(number);
-
-    if (conflict && conflict.id !== id) {
-      if (!swapOnConflict) {
-        const error = new Error(`Startnummer ${number} ist bereits an ${conflict.name} vergeben`);
-        error.code = 'START_NUMBER_CONFLICT';
-        error.conflictingShooter = conflict;
-        throw error;
-      }
-
-      db.exec('BEGIN IMMEDIATE');
-      try {
-        run('UPDATE shooters SET start_number = NULL WHERE id = ?', [conflict.id]);
-        run('UPDATE shooters SET name = ?, gender = ?, start_number = ? WHERE id = ?', [name, gender, number, id]);
-        run('UPDATE shooters SET start_number = ? WHERE id = ?', [current.start_number, conflict.id]);
-        db.exec('COMMIT');
-      } catch (error) {
-        db.exec('ROLLBACK');
-        throw error;
-      }
-    } else {
-      run('UPDATE shooters SET name = ?, gender = ?, start_number = ? WHERE id = ?', [name, gender, number, id]);
+  findByStartNumber(n) { return get(shooterSelect+' WHERE p.start_number=? AND p.event_id=?',[n,current()]); },
+  register(shooterId, startNumber=this.nextStartNumber()) {
+    const s=People.get(positive(shooterId,'Schützen-ID')); Events.writable(current());
+    if(s.archived_at) fail('Archivierten Schützen zuerst reaktivieren');
+    positive(startNumber,'Startnummer');
+    if(this.findById(shooterId)) fail('Schütze ist bereits für dieses Event angemeldet',409);
+    if(this.findByStartNumber(startNumber)) fail('Startnummer ist bereits vergeben',409);
+    run('INSERT INTO participants(event_id,shooter_id,start_number,name,gender) VALUES (?,?,?,?,?)',[current(),shooterId,startNumber,s.name,s.gender]);
+    return this.findById(shooterId);
+  },
+  create(data) { return transaction(()=>this.register(People.create(data).id,data.start_number)); },
+  update(id,data,{swapOnConflict=false}={}) {
+    const s=this.findById(id); if(!s) fail('Teilnehmer nicht gefunden',404);
+    const p=person(data); const n=data.start_number === undefined ? s.start_number : positive(data.start_number,'Startnummer');
+    const conflict=this.findByStartNumber(n);
+    if(conflict && conflict.id!==id && !swapOnConflict) {
+      const e=new Error('Startnummer ist bereits vergeben'); e.code='START_NUMBER_CONFLICT'; e.status=409; e.conflictingShooter=conflict; throw e;
     }
+    return transaction(()=>{
+      if(conflict && conflict.id!==id) run('UPDATE participants SET start_number=NULL WHERE id=?',[conflict.participant_id]);
+      run('UPDATE participants SET name=?,gender=?,start_number=? WHERE id=?',[p.name,p.gender,n,s.participant_id]);
+      People.update(id,p);
+      if(conflict && conflict.id!==id) run('UPDATE participants SET start_number=? WHERE id=?',[s.start_number,conflict.participant_id]);
+      return this.findById(id);
+    });
+  },
+  remove(id) {
+    const s=this.findById(id); if(!s) fail('Teilnehmer nicht gefunden',404);
+    run('DELETE FROM participants WHERE id=?',[s.participant_id]);
+  }
+};
+const Disciplines = {
+  list(eventId=current()) { return all('SELECT * FROM disciplines WHERE event_id=? ORDER BY sort_order,name COLLATE NOCASE',[eventId]); },
+  findById(id) { return get('SELECT * FROM disciplines WHERE id=? AND event_id=?',[id,current()]); },
+  findByName(name) { return get('SELECT * FROM disciplines WHERE name=? COLLATE NOCASE AND event_id=?',[name,current()]); },
+  create({name}) {
+    if(typeof name!=='string' || !name.trim() || name.length>200) fail('Disziplinname ist ungültig');
+    const order=get('SELECT COALESCE(MAX(sort_order),0)+1 AS n FROM disciplines WHERE event_id=?',[current()]).n;
+    const id=Number(run('INSERT INTO disciplines(event_id,name,sort_order) VALUES (?,?,?)',[current(),name.trim(),order]).lastInsertRowid);
     return this.findById(id);
   },
-  remove(id) {
-    run('DELETE FROM shooters WHERE id = ?', [id]);
+  update(id,{name}) {
+    if(!this.findById(id)) fail('Disziplin nicht gefunden',404);
+    if(typeof name!=='string' || !name.trim() || name.length>200) fail('Disziplinname ist ungültig');
+    run('UPDATE disciplines SET name=? WHERE id=?',[name.trim(),id]); return this.findById(id);
   },
-  findByName(name) {
-    return get('SELECT * FROM shooters WHERE name = ? COLLATE NOCASE', [name]);
-  },
-  findById(id) {
-    return get('SELECT * FROM shooters WHERE id = ?', [id]);
-  },
-  findByStartNumber(startNumber) {
-    return get('SELECT * FROM shooters WHERE start_number = ?', [startNumber]);
-  },
+  remove(id) { if(!this.findById(id)) fail('Disziplin nicht gefunden',404); run('DELETE FROM disciplines WHERE id=?',[id]); }
 };
-
-// ---------- Disciplines ----------
-
-const Disciplines = {
-  list() {
-    return all('SELECT * FROM disciplines ORDER BY sort_order, name COLLATE NOCASE');
-  },
-  create({ name }) {
-    const maxOrder = get('SELECT COALESCE(MAX(sort_order), 0) AS m FROM disciplines').m;
-    const res = run('INSERT INTO disciplines (name, sort_order) VALUES (?, ?)', [name, maxOrder + 1]);
-    return get('SELECT * FROM disciplines WHERE id = ?', [res.lastInsertRowid]);
-  },
-  update(id, { name }) {
-    run('UPDATE disciplines SET name = ? WHERE id = ?', [name, id]);
-    return get('SELECT * FROM disciplines WHERE id = ?', [id]);
-  },
-  remove(id) {
-    run('DELETE FROM disciplines WHERE id = ?', [id]);
-  },
-  findByName(name) {
-    return get('SELECT * FROM disciplines WHERE name = ? COLLATE NOCASE', [name]);
-  },
-  findById(id) {
-    return get('SELECT * FROM disciplines WHERE id = ?', [id]);
-  },
-};
-
-// ---------- Results ----------
-
+const resultSelect='SELECT r.*,p.shooter_id FROM results r JOIN participants p ON p.id=r.participant_id';
 const Results = {
-  listForShooterDiscipline(shooterId, disciplineId) {
-    return all(
-      'SELECT * FROM results WHERE shooter_id = ? AND discipline_id = ? ORDER BY round_number',
-      [shooterId, disciplineId]
-    );
+  listForShooterDiscipline(id,disciplineId) { return all(resultSelect+' WHERE p.shooter_id=? AND r.discipline_id=? AND r.event_id=? ORDER BY r.round_number,r.id',[id,disciplineId,current()]); },
+  findById(id) { return get(resultSelect+' WHERE r.id=? AND r.event_id=?',[id,current()]); },
+  create({shooter_id,discipline_id,round_number,points}) {
+    const s=Shooters.findById(shooter_id);
+    if(!s || !Disciplines.findById(discipline_id)) fail('Teilnehmer oder Disziplin gehört nicht zum aktiven Event');
+    positive(round_number,'Durchgang'); if(typeof points!=='number' || !Number.isFinite(points)) fail('Punkte sind ungültig');
+    const id=Number(run('INSERT INTO results(event_id,participant_id,discipline_id,round_number,points) VALUES (?,?,?,?,?)',[current(),s.participant_id,discipline_id,round_number,points]).lastInsertRowid);
+    return this.findById(id);
   },
-  create({ shooter_id, discipline_id, round_number, points }) {
-    const res = run(
-      'INSERT INTO results (shooter_id, discipline_id, round_number, points) VALUES (?, ?, ?, ?)',
-      [shooter_id, discipline_id, round_number, points]
-    );
-    return get('SELECT * FROM results WHERE id = ?', [res.lastInsertRowid]);
+  update(id,{points,round_number}) {
+    if(!this.findById(id)) fail('Ergebnis nicht gefunden',404);
+    positive(round_number,'Durchgang'); if(typeof points!=='number' || !Number.isFinite(points)) fail('Punkte sind ungültig');
+    run('UPDATE results SET points=?,round_number=? WHERE id=?',[points,round_number,id]); return this.findById(id);
   },
-  update(id, { points, round_number }) {
-    run('UPDATE results SET points = ?, round_number = ? WHERE id = ?', [points, round_number, id]);
-    return get('SELECT * FROM results WHERE id = ?', [id]);
-  },
-  remove(id) {
-    run('DELETE FROM results WHERE id = ?', [id]);
-  },
-  nextRoundNumber(shooterId, disciplineId) {
-    const row = get(
-      'SELECT COALESCE(MAX(round_number), 0) AS m FROM results WHERE shooter_id = ? AND discipline_id = ?',
-      [shooterId, disciplineId]
-    );
-    return row.m + 1;
-  },
-  findById(id) {
-    return get('SELECT * FROM results WHERE id = ?', [id]);
-  },
+  remove(id) { if(!this.findById(id)) fail('Ergebnis nicht gefunden',404); run('DELETE FROM results WHERE id=?',[id]); },
+  nextRoundNumber(id,d) { return Math.max(0,...this.listForShooterDiscipline(id,d).map(r=>r.round_number))+1; },
+  correct(eventId,id,points) {
+    if(Events.get(eventId).status!=='correction') fail('Korrekturmodus erforderlich',409);
+    if(typeof points!=='number' || !Number.isFinite(points)) fail('Punkte sind ungültig');
+    if(!get('SELECT id FROM results WHERE id=? AND event_id=?',[id,eventId])) fail('Ergebnis nicht gefunden',404);
+    run('UPDATE results SET points=? WHERE id=?',[points,id]);
+  }
 };
-
-// ---------- Rankings ----------
-
-/**
- * Rangliste fuer eine Disziplin.
- * Wertung: bester Durchgang zaehlt. Bei Gleichstand entscheidet der
- * naechstbeste Durchgang (rekursiver Tie-Break ueber alle Durchgaenge).
- */
-function rankingForDiscipline(disciplineId) {
-  const rows = all(
-    `SELECT s.id AS shooter_id, s.name, s.gender, s.start_number, r.points
-     FROM shooters s
-     JOIN results r ON r.shooter_id = s.id
-     WHERE r.discipline_id = ?`,
-    [disciplineId]
-  );
-
-  const byShooter = new Map();
-  for (const row of rows) {
-    if (!byShooter.has(row.shooter_id)) {
-      byShooter.set(row.shooter_id, {
-        shooter_id: row.shooter_id,
-        name: row.name,
-        gender: row.gender,
-        start_number: row.start_number,
-        allPoints: [],
-      });
-    }
-    byShooter.get(row.shooter_id).allPoints.push(row.points);
+function rankingForDiscipline(id, calculate=false) {
+  const d=get('SELECT * FROM disciplines WHERE id=?',[id]); if(!d) return [];
+  const e=Events.get(d.event_id);
+  if(e.status==='closed' && !calculate) return all(`SELECT f.rank,p.shooter_id,p.id AS participant_id,p.name,p.gender,p.start_number,
+    f.best_points,f.rounds FROM placements f JOIN participants p ON p.id=f.participant_id
+    WHERE f.discipline_id=? AND f.revision=? ORDER BY f.rank`,[id,e.revision]).map(({rounds,...r})=>({...r,all_rounds:JSON.parse(rounds)}));
+  const by=new Map();
+  for(const r of all(`SELECT p.*,r.points FROM participants p JOIN results r ON r.participant_id=p.id WHERE r.discipline_id=?`,[id])) {
+    if(!by.has(r.id)) by.set(r.id,{shooter_id:r.shooter_id,participant_id:r.id,name:r.name,gender:r.gender,start_number:r.start_number,all_rounds:[]});
+    by.get(r.id).all_rounds.push(r.points);
   }
-
-  const entries = [...byShooter.values()].map((e) => {
-    const sorted = [...e.allPoints].sort((a, b) => b - a); // absteigend
-    return {
-      shooter_id: e.shooter_id,
-      name: e.name,
-      gender: e.gender,
-      start_number: e.start_number,
-      best_points: sorted[0],
-      rounds_sorted: sorted,
-      num_rounds: sorted.length,
-    };
-  });
-
-  entries.sort((a, b) => {
-    const len = Math.max(a.rounds_sorted.length, b.rounds_sorted.length);
-    for (let i = 0; i < len; i++) {
-      const av = a.rounds_sorted[i];
-      const bv = b.rounds_sorted[i];
-      if (av === undefined && bv === undefined) return 0;
-      if (av === undefined) return 1; // weniger Durchgaenge -> nach hinten bei Gleichstand
-      if (bv === undefined) return -1;
-      if (av !== bv) return bv - av; // absteigend
+  const entries=[...by.values()];
+  entries.forEach(r=>r.all_rounds.sort((a,b)=>b-a));
+  entries.sort((a,b)=>{
+    for(let i=0;i<Math.max(a.all_rounds.length,b.all_rounds.length);i++) {
+      if(a.all_rounds[i]===undefined) return 1;
+      if(b.all_rounds[i]===undefined) return -1;
+      if(a.all_rounds[i]!==b.all_rounds[i]) return b.all_rounds[i]-a.all_rounds[i];
     }
-    return a.name.localeCompare(b.name);
+    return a.name.localeCompare(b.name,'de') || a.participant_id-b.participant_id;
   });
-
-  return entries.map((e, idx) => ({
-    rank: idx + 1,
-    shooter_id: e.shooter_id,
-    name: e.name,
-    gender: e.gender,
-    start_number: e.start_number,
-    best_points: e.best_points,
-    all_rounds: e.rounds_sorted,
-  }));
+  return entries.map((r,i)=>({...r,rank:i+1,best_points:r.all_rounds[0]}));
 }
-
-/**
- * Kompakter Datenstand fuer die Live-Anzeige im Schuetzenhaus.
- * Die Ranglisten werden mit derselben Wertungslogik wie in der Verwaltung
- * berechnet, damit beide Ansichten jederzeit identische Plaetze zeigen.
- */
 function dashboardSnapshot() {
-  const disciplines = Disciplines.list().map((discipline) => ({
-    id: discipline.id,
-    name: discipline.name,
-    ranking: rankingForDiscipline(discipline.id),
-  }));
-
-  const latestResults = all(
-    `SELECT r.id, r.points, r.round_number, r.created_at,
-            s.name AS shooter_name, s.start_number, d.id AS discipline_id, d.name AS discipline_name
-     FROM results r
-     JOIN shooters s ON s.id = r.shooter_id
-     JOIN disciplines d ON d.id = r.discipline_id
-     ORDER BY r.id DESC
-     LIMIT 10`
-  );
-
-  return {
-    event_title: Season.getTitle(),
-    updated_at: new Date().toISOString(),
-    stats: {
-      shooters: get('SELECT COUNT(*) AS count FROM shooters').count,
-      disciplines: disciplines.length,
-      results: get('SELECT COUNT(*) AS count FROM results').count,
-    },
-    disciplines,
-    latest_results: latestResults,
-  };
+  const disciplines=Disciplines.list().map(d=>({...d,ranking:rankingForDiscipline(d.id)}));
+  return {event_title:Season.getTitle(),updated_at:new Date().toISOString(),
+    stats:{shooters:Shooters.list().length,disciplines:disciplines.length,results:get('SELECT COUNT(*) AS n FROM results WHERE event_id=?',[current()]).n},
+    disciplines, latest_results:all(`SELECT r.id,r.points,r.round_number,r.created_at,p.name AS shooter_name,p.start_number,d.id AS discipline_id,d.name AS discipline_name
+      FROM results r JOIN participants p ON p.id=r.participant_id JOIN disciplines d ON d.id=r.discipline_id WHERE r.event_id=? ORDER BY r.id DESC LIMIT 10`,[current()])};
 }
-
-// ---------- Season export / reset ----------
-
-function fullExport() {
-  return {
-    event_title: Season.getTitle(),
-    exported_at: new Date().toISOString(),
-    shooters: all('SELECT * FROM shooters'),
-    disciplines: all('SELECT * FROM disciplines'),
-    results: all('SELECT * FROM results'),
-  };
-}
-
-function archiveCurrentSeason(label) {
-  const data = fullExport();
-  const safeLabel = (label || Season.getTitle() || `saison-${Date.now()}`).replace(/[^a-zA-Z0-9_\-]/g, '_');
-  let filePath = path.join(ARCHIVE_DIR, `${safeLabel}.json`);
-  let suffix = 2;
-  while (fs.existsSync(filePath)) {
-    filePath = path.join(ARCHIVE_DIR, `${safeLabel}-${suffix}.json`);
-    suffix++;
-  }
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
-  return filePath;
-}
-
-function validateSeasonArchive(data) {
-  if (!data || typeof data !== 'object' || Array.isArray(data)) {
-    throw new Error('Die JSON-Datei enthält kein gültiges Saisonarchiv');
-  }
-
-  const eventTitle = typeof data.event_title === 'string' ? data.event_title.trim() : '';
-  if (eventTitle.length > 200) throw new Error('Der Eventtitel ist länger als 200 Zeichen');
-  if (!Array.isArray(data.shooters) || !Array.isArray(data.disciplines) || !Array.isArray(data.results)) {
-    throw new Error('Im Saisonarchiv fehlen Schützen, Disziplinen oder Ergebnisse');
-  }
-
-  const validateId = (value, label) => {
-    if (!Number.isSafeInteger(value) || value < 1) throw new Error(`${label} ist ungültig`);
-    return value;
-  };
-  const validateCreatedAt = (value, label) => {
-    if (typeof value !== 'string' || !value.trim()) throw new Error(`${label}: Erstellungsdatum fehlt`);
-    return value;
-  };
-
-  const shooterIds = new Set();
-  const startNumbers = new Set();
-  const shooters = data.shooters.map((item, index) => {
-    if (!item || typeof item !== 'object') throw new Error(`Schütze ${index + 1} ist ungültig`);
-    const id = validateId(item.id, `Schütze ${index + 1}: ID`);
-    if (shooterIds.has(id)) throw new Error(`Schützen-ID ${id} kommt mehrfach vor`);
-    shooterIds.add(id);
-    const name = typeof item.name === 'string' ? item.name.trim() : '';
-    if (!name) throw new Error(`Schütze ${index + 1}: Name fehlt`);
-    if (!['m', 'w'].includes(item.gender)) throw new Error(`Schütze ${index + 1}: Geschlecht ist ungültig`);
-    let start_number = item.start_number;
-    if (start_number !== undefined && (!Number.isSafeInteger(start_number) || start_number < 1)) {
-      throw new Error(`Schütze ${index + 1}: Startnummer ist ungültig`);
-    }
-    if (start_number !== undefined && startNumbers.has(start_number)) {
-      throw new Error(`Startnummer ${start_number} kommt mehrfach vor`);
-    }
-    if (start_number !== undefined) startNumbers.add(start_number);
-    return { id, name, gender: item.gender, start_number, created_at: validateCreatedAt(item.created_at, `Schütze ${index + 1}`) };
-  });
-
-  // Archive aus älteren App-Versionen enthielten noch keine Startnummer.
-  // Solche Schützen bekommen beim Einlesen deterministisch die nächste freie.
-  let nextArchiveStartNumber = 1;
-  for (const shooter of shooters) {
-    if (shooter.start_number !== undefined) continue;
-    while (startNumbers.has(nextArchiveStartNumber)) nextArchiveStartNumber++;
-    shooter.start_number = nextArchiveStartNumber;
-    startNumbers.add(nextArchiveStartNumber);
-  }
-
-  const disciplineIds = new Set();
-  const disciplineNames = new Set();
-  const disciplines = data.disciplines.map((item, index) => {
-    if (!item || typeof item !== 'object') throw new Error(`Disziplin ${index + 1} ist ungültig`);
-    const id = validateId(item.id, `Disziplin ${index + 1}: ID`);
-    if (disciplineIds.has(id)) throw new Error(`Disziplin-ID ${id} kommt mehrfach vor`);
-    disciplineIds.add(id);
-    const name = typeof item.name === 'string' ? item.name.trim() : '';
-    if (!name) throw new Error(`Disziplin ${index + 1}: Name fehlt`);
-    const normalizedName = name.toLocaleLowerCase('de');
-    if (disciplineNames.has(normalizedName)) throw new Error(`Disziplin "${name}" kommt mehrfach vor`);
-    disciplineNames.add(normalizedName);
-    if (!Number.isSafeInteger(item.sort_order)) throw new Error(`Disziplin ${index + 1}: Sortierung ist ungültig`);
-    return {
-      id,
-      name,
-      sort_order: item.sort_order,
-      created_at: validateCreatedAt(item.created_at, `Disziplin ${index + 1}`),
-    };
-  });
-
-  const resultIds = new Set();
-  const results = data.results.map((item, index) => {
-    if (!item || typeof item !== 'object') throw new Error(`Ergebnis ${index + 1} ist ungültig`);
-    const id = validateId(item.id, `Ergebnis ${index + 1}: ID`);
-    if (resultIds.has(id)) throw new Error(`Ergebnis-ID ${id} kommt mehrfach vor`);
-    resultIds.add(id);
-    const shooter_id = validateId(item.shooter_id, `Ergebnis ${index + 1}: Schützen-ID`);
-    const discipline_id = validateId(item.discipline_id, `Ergebnis ${index + 1}: Disziplin-ID`);
-    if (!shooterIds.has(shooter_id)) throw new Error(`Ergebnis ${index + 1} verweist auf einen unbekannten Schützen`);
-    if (!disciplineIds.has(discipline_id)) throw new Error(`Ergebnis ${index + 1} verweist auf eine unbekannte Disziplin`);
-    if (!Number.isSafeInteger(item.round_number) || item.round_number < 1) {
-      throw new Error(`Ergebnis ${index + 1}: Durchgang ist ungültig`);
-    }
-    if (typeof item.points !== 'number' || !Number.isFinite(item.points)) {
-      throw new Error(`Ergebnis ${index + 1}: Punkte sind ungültig`);
-    }
-    return {
-      id,
-      shooter_id,
-      discipline_id,
-      round_number: item.round_number,
-      points: item.points,
-      created_at: validateCreatedAt(item.created_at, `Ergebnis ${index + 1}`),
-    };
-  });
-
-  return { event_title: eventTitle, shooters, disciplines, results };
-}
-
-function restoreSeasonArchive(data) {
-  const archive = validateSeasonArchive(data);
-  const current = fullExport();
-  const hasCurrentData = current.event_title || current.shooters.length || current.disciplines.length || current.results.length;
-  const backupPath = hasCurrentData ? archiveCurrentSeason(current.event_title || 'vor-json-import') : null;
-
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    resetSeason();
-    const insertShooter = db.prepare(
-      'INSERT INTO shooters (id, name, gender, start_number, created_at) VALUES (?, ?, ?, ?, ?)'
-    );
-    const insertDiscipline = db.prepare(
-      'INSERT INTO disciplines (id, name, sort_order, created_at) VALUES (?, ?, ?, ?)'
-    );
-    const insertResult = db.prepare(
-      'INSERT INTO results (id, shooter_id, discipline_id, round_number, points, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-    );
-    for (const shooter of archive.shooters) {
-      insertShooter.run(shooter.id, shooter.name, shooter.gender, shooter.start_number, shooter.created_at);
-    }
-    for (const discipline of archive.disciplines) {
-      insertDiscipline.run(discipline.id, discipline.name, discipline.sort_order, discipline.created_at);
-    }
-    for (const result of archive.results) {
-      insertResult.run(
-        result.id,
-        result.shooter_id,
-        result.discipline_id,
-        result.round_number,
-        result.points,
-        result.created_at
-      );
-    }
-    Season.setTitle(archive.event_title);
-    db.exec('COMMIT');
-  } catch (error) {
-    db.exec('ROLLBACK');
-    throw error;
-  }
-
-  return {
-    restored: {
-      shooters: archive.shooters.length,
-      disciplines: archive.disciplines.length,
-      results: archive.results.length,
-    },
-    event_title: archive.event_title,
-    backup: backupPath ? path.basename(backupPath) : null,
-  };
-}
-
-function resetSeason() {
-  run('DELETE FROM results');
-  run('DELETE FROM disciplines');
-  run('DELETE FROM shooters');
-  run("DELETE FROM sqlite_sequence WHERE name IN ('results','disciplines','shooters')");
-  Season.setTitle('');
-}
-
-function listArchives() {
-  return fs
-    .readdirSync(ARCHIVE_DIR)
-    .filter((f) => f.endsWith('.json'))
-    .sort()
-    .reverse();
-}
-
-module.exports = {
-  db,
-  Shooters,
-  Disciplines,
-  Results,
-  Season,
-  rankingForDiscipline,
-  dashboardSnapshot,
-  fullExport,
-  archiveCurrentSeason,
-  validateSeasonArchive,
-  restoreSeasonArchive,
-  resetSeason,
-  listArchives,
-  ARCHIVE_DIR,
+module.exports = { ...store, Events, People, Shooters, Disciplines, Results, Season, rankingForDiscipline, dashboardSnapshot, fail, person,
+  fullExport:(...args)=>require('./archives').fullExport(...args),
+  archiveCurrentSeason:(...args)=>require('./archives').archiveCurrentSeason(...args),
+  validateSeasonArchive:(...args)=>require('./archives').validateSeasonArchive(...args),
+  restoreSeasonArchive:(...args)=>require('./archives').restoreSeasonArchive(...args),
+  listArchives:()=>require('./archives').listArchives(),
+  resetSeason:(data)=>Events.start(data)
 };

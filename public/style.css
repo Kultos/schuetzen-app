@@ -66,6 +66,17 @@ h2 { margin-top: 0; color: var(--primary); }
 }
 
 #shooterForm { align-items: flex-end; }
+dialog { border: 1px solid #bbb; border-radius: .5rem; padding: 1.5rem; max-width: min(950px, 94vw); max-height: 90vh; overflow: auto; }
+dialog::backdrop { background: rgb(0 0 0 / .65); }
+dialog form { display: grid; gap: .8rem; }
+.form-field { display: grid; gap: .35rem; margin: .6rem 0; }
+textarea { min-height: 6rem; width: 100%; padding: .5rem; }
+input[type="email"], input[type="password"], input[type="search"] { padding: .5rem; border: 1px solid #bbb; border-radius: .25rem; }
+.table-scroll { overflow-x: auto; }
+#peopleRows .row-actions { display: flex; flex-wrap: wrap; gap: .3rem; }
+#peopleRows button { font-size: .85rem; }
+#loginError { color: #a00; }
+#backupList { overflow-wrap: anywhere; }
 #shooterForm input, #shooterForm select, #shooterForm button { height: 2.35rem; }
 
 input[type="text"], input[type="number"], select {
