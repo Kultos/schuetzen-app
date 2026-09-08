@@ -2,16 +2,41 @@
 
 Lokale Wettkampfverwaltung mit dauerhaftem Schützenstamm, freiwilligen E-Mail-Kontakten, eventbezogenen Startnummern und Teilnahmehistorie. Node.js 24 oder neuer, keine npm-Installation erforderlich.
 
-## Start und Umstellung
+## Empfohlener Windows-Eventbetrieb
+
+Für den Veranstaltungsrechner ist die automatische Windows-Einrichtung vorgesehen. Sie muss für den vorgesehenen Windows-Benutzer einmal vorgenommen werden:
+
+1. Node.js 24 oder neuer installieren.
+2. `setup-windows.bat` doppelt anklicken.
+3. Die Abfrage der Benutzerkontensteuerung für die Firewall-Regel bestätigen.
+4. Nach der Erfolgsmeldung die App über das neue Desktop-Symbol **„Schützen-App öffnen“** aufrufen.
+
+Die Einrichtung legt die Windows-Aufgabe `Schuetzen-App-Server` an. Sie startet den Server beim Anmelden unsichtbar im Hintergrund, verhindert den automatischen Standby während des Serverbetriebs und startet den Server nach einem Fehler innerhalb einer Minute neu. Der Bildschirm darf sich weiterhin abschalten. Zuklappen des Laptops, manuell ausgelöster Standby und Abmelden beenden den laufenden Betrieb.
+
+Das Desktop-Symbol startet ohne sichtbares Konsolenfenster, prüft die Bereitschaft der App, startet die Aufgabe bei Bedarf und öffnet anschließend `http://localhost:3000`. Mehrfaches Anklicken erzeugt keine zweite Serverinstanz. Das schwarze Serverfenster muss dabei nicht geöffnet bleiben. Startmeldungen und Fehler stehen in `data/logs/`; Protokolle älter als 30 Tage werden automatisch entfernt.
+
+Die Firewall-Regel gilt nur für private Netzwerke und Port 3000. Damit ist das öffentliche Live-Dashboard für Geräte im Veranstaltungsnetz erreichbar; die Verwaltung über unverschlüsseltes HTTP bleibt durch die App weiterhin auf den Serverrechner beschränkt. Nach dem Verschieben des App-Ordners oder einer Neuinstallation von Node.js `setup-windows.bat` erneut ausführen.
+
+`remove-windows-setup.bat` entfernt Aufgabe, Desktop-Symbol und Firewall-Regel wieder. Anwendungsdaten, Archive und Backups bleiben erhalten. Der bisherige Doppelklick auf `start.bat` bleibt als sichtbarer manueller Diagnoseweg verfügbar.
+
+Für einen abweichenden Port kann die Einrichtung aus einer Eingabeaufforderung aufgerufen werden, zum Beispiel `setup-windows.bat -Port 3001`.
+
+Ein externes Sicherungsverzeichnis wird beim Einrichten dauerhaft in der Serveraufgabe hinterlegt. Das Zielverzeichnis muss bereits vorhanden sein, beispielsweise:
+
+```text
+setup-windows.bat -BackupDirectory "E:\Schuetzen-Backups" -BackupRetentionDays 30
+```
+
+## Erste Einrichtung und Umstellung bestehender Daten
 
 1. Vor einem Update bisherigen Server beenden und Datenordner separat sichern.
-2. `start.bat` starten und am Server `http://localhost:3000` öffnen.
+2. Die App über das Desktop-Symbol öffnen oder für eine Diagnose `start.bat` starten und am Server `http://localhost:3000` öffnen.
 3. Einmalig ein Verwaltungskennwort mit mindestens 12 Zeichen festlegen. Einrichtung ist nur über localhost möglich.
 4. Unter „Saison & Netzwerk“ Titel und tatsächliches Veranstaltungsjahr des übernommenen Events speichern.
 
 Beim ersten Start mit alter Datenbank entsteht vor Änderungen eine geprüfte Kopie in `data/backups/`. Die Migration übernimmt Personen, Nummern, Disziplinen und Ergebnisse in ein aktives Event. Sie läuft vollständig in einer Transaktion und wird bei Fehlern zurückgerollt. Das Jahr wird nicht aus Dateidaten geraten. Das Vorabbackup hat noch das alte Schema: zur Rückkehr mit der vorherigen App-Version öffnen, nicht über den neuen Systemrestore.
 
-Das Serverfenster bleibt während des Betriebs geöffnet. Mehrere Helfer benutzen dieselbe Serverinstanz. Keine zweite Instanz auf denselben Datenordner starten.
+Beim manuellen Start bleibt das Serverfenster während des Betriebs geöffnet. Im empfohlenen Windows-Eventbetrieb läuft dieselbe Serverinstanz unsichtbar über die Aufgabenplanung. Mehrere Helfer benutzen diese eine Instanz. Keine zweite Instanz auf denselben Datenordner starten.
 
 ## Stamm, Teilnahmen und Historie
 
@@ -70,7 +95,13 @@ Vollbackups enthalten Stamm, Kontakte, Nachweise, alle Events und Wertungsversio
 
 Sicherung beim regulären Start und danach spätestens alle fünf Minuten nach Änderungen. Zusätzlich vor Migration, Eventwechsel, Korrekturmodus, Eventimport und Vollrestore sowie nach Eventwechsel. Manuell über „Vollbackup erstellen“. Änderungen seit dem letzten erfolgreichen Backup können bei abruptem Ausfall verloren gehen.
 
-Ein zweites, bereits vorhandenes Verzeichnis auf einem verschlüsselten externen Medium konfigurieren:
+Ein zweites, bereits vorhandenes Verzeichnis auf einem verschlüsselten externen Medium konfigurieren. Im automatischen Windows-Eventbetrieb dazu die Einrichtung erneut ausführen:
+
+```text
+setup-windows.bat -BackupDirectory "E:\Schuetzen-Backups" -BackupRetentionDays 30
+```
+
+Beim manuellen Serverstart können stattdessen Umgebungsvariablen gesetzt werden:
 
 ```powershell
 $env:SCHUETZEN_BACKUP_DIR = 'E:\Schuetzen-Backups'

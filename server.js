@@ -135,6 +135,9 @@ async function handleApi(req, res, pathname, query) {
   const method = req.method;
   res.setHeader('Cache-Control','no-store');
   if(!Auth.validateWrite(req)) return sendError(res,403,'Ungültige Anfrage');
+  if(pathname === '/api/health' && method === 'GET') {
+    return sendJSON(res,200,{status:'ok',application:'schuetzen-app'});
+  }
   if(pathname === '/api/auth/status' && method === 'GET') return sendJSON(res,200,{configured:Auth.configured(),authenticated:!!Auth.session(req),local:Auth.local(req),secure:Auth.protectedTransport(req)});
   if(pathname === '/api/auth/setup' && method === 'POST') {
     const body=await readBody(req);

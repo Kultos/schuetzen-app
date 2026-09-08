@@ -622,6 +622,9 @@ test('Einladungsexport validiert Eventfilter und begrenzt Empfänger auf das gew
 });
 
 test('Anmeldung, CSRF-Schutz und veralteter Eventkontext werden serverseitig geprüft', async () => {
+  const health=await fetch(baseUrl+'/api/health');
+  assert.equal(health.status,200);
+  assert.deepEqual(await health.json(),{status:'ok',application:'schuetzen-app'});
   const anonymous=await fetch(baseUrl+'/api/people');assert.equal(anonymous.status,401);
   const dashboard=await fetch(baseUrl+'/api/dashboard');assert.equal(dashboard.status,200);
   const csrf=await fetch(baseUrl+'/api/shooters',{method:'POST',headers:{Cookie:cookie,'Content-Type':'application/json'},body:JSON.stringify({name:'CSRF',gender:'m'})});
