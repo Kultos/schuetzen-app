@@ -2,8 +2,11 @@
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
+const {createHash,randomUUID}=require('node:crypto');
+const {DatabaseSync}=require('node:sqlite');
 const { after, before, beforeEach, test } = require('node:test');
 
 const testDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'schuetzen-app-test-'));
@@ -88,7 +91,7 @@ before(async () => {
 
 beforeEach(async () => {
   db.exec("DELETE FROM person_aliases; DELETE FROM consent_log; DELETE FROM contacts; DELETE FROM imports; DELETE FROM placements; DELETE FROM closures; DELETE FROM results; DELETE FROM disciplines; DELETE FROM participants; DELETE FROM events; DELETE FROM shooters;");
-  db.prepare("INSERT INTO events(uuid,title,year,status) VALUES (?,'',2026,'active')").run(require('node:crypto').randomUUID());
+  db.prepare("INSERT INTO events(uuid,title,year,status) VALUES (?,'',2026,'active')").run(randomUUID());
   db.prepare("DELETE FROM settings WHERE key='privacy_review'").run();
   await api('/api/auth/login',{method:'POST',json:{password:'test-password-12345'}});
   clearArchives();
@@ -451,6 +454,9 @@ test('Versionierte Eventarchive müssen eine vollständige und regelkonforme Abs
   const invalidMetadata=fullExport(old);
   invalidMetadata.event.revision='1';
   assert.throws(()=>validateSeasonArchive(invalidMetadata),/Eventrevision/);
+  const incompleteHistory=fullExport(old);
+  incompleteHistory.placement_history.pop();
+  assert.throws(()=>validateSeasonArchive(incompleteHistory),/Historische Abschlusswertung|Versionshistorie/);
 });
 
 test('Gültiger JSON-Archivimport funktioniert über Vorschau und explizite Zuordnung', async () => {
@@ -532,7 +538,8 @@ test('Wiederanmeldung erhält Identität und historische Namen, Startnummern und
   assert.throws(()=>Shooters.register(s.id,2),/bereits/);
   assert.equal(fullExport(previous).shooters[0].name,'Anna Alt');
   assert.equal(fullExport(previous).shooters[0].start_number,42);
-  assert.equal(People.history(s.id).find(h=>h.id===previous).placements[0].rank,1);
+  const history=People.history(s.id).find(h=>h.id===previous);
+  assert.equal(history.historical_name,'Anna Alt');assert.equal(history.placements[0].rank,1);
   assert.throws(()=>Results.create({shooter_id:s.id,discipline_id:d.id,round_number:1,points:99}),/aktiven Event/);
   assert.throws(()=>Events.start({title:'Doppelt',year:2028,previous_event_id:previous}),/geändert/);
 });
@@ -552,12 +559,22 @@ test('Abschlusskorrektur erfordert Begründung und erzeugt eine neue Wertungsver
   assert.equal(db.prepare('SELECT best_points FROM placements WHERE event_id=? AND revision=1').get(previous).best_points,80);
 
   const archive=fullExport(previous);
+  assert.equal(archive.version,3);
+  assert.deepEqual([...new Set(archive.placement_history.map(p=>p.revision))],[1,2]);
+  assert.deepEqual(archive.closures.map(c=>c.revision),[1,2]);
   archive.event.uuid='99999999-9999-4999-8999-999999999999';
   const preview=require('../archives').preview(archive);
   const mapping=Object.fromEntries(archive.shooters.map(person=>[person.id,person.id]));
   const imported=restoreSeasonArchive(archive,{year:2026,fingerprint:preview.fingerprint,mapping});
   assert.equal(Events.get(imported.event_id).revision,2);
-  assert.equal(db.prepare('SELECT revision FROM placements WHERE event_id=?').get(imported.event_id).revision,2);
+  assert.deepEqual(db.prepare('SELECT DISTINCT revision FROM placements WHERE event_id=? ORDER BY revision').all(imported.event_id).map(r=>r.revision),[1,2]);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM closures WHERE event_id=?').get(imported.event_id).n,2);
+
+  const oldV2=structuredClone(archive);oldV2.version=2;oldV2.event.uuid='88888888-8888-4888-8888-888888888888';delete oldV2.placement_history;delete oldV2.closures;
+  const oldPreview=require('../archives').preview(oldV2);
+  const reconstructed=restoreSeasonArchive(oldV2,{year:2026,fingerprint:oldPreview.fingerprint,mapping});
+  assert.equal(Events.get(reconstructed.event_id).revision,1);
+  assert.equal(Events.get(reconstructed.event_id).reconstructed,1);
 });
 
 test('Nicht angemeldete Personen dürfen keine Ergebnisse erhalten; Entfernen betrifft nur aktuelle Teilnahme', () => {
@@ -581,9 +598,27 @@ test('Kontakte benötigen dokumentierte Einwilligung und erscheinen ausschließl
     assert.ok(!output.includes(consentData.email),endpoint+' darf keine E-Mail enthalten');
     assert.ok(!output.includes(consentData.evidence),endpoint+' darf keinen Nachweis enthalten');
   }
+  const beforePurge=require('../backups').bundle(require('../backups').create('vor-nachweisloeschung'));
+  assert.equal((await api('/api/people/'+s.id+'/consent-log',{method:'DELETE',json:{confirm:true}})).response.status,400);
   await api('/api/people/'+s.id+'/contact',{method:'DELETE'});
   assert.deepEqual((await api('/api/invitations')).body,[]);
   assert.equal((await api('/api/people/'+s.id+'/contact')).body.contact,null);
+  assert.ok((await api('/api/people/'+s.id+'/contact')).body.log.length>=2);
+  await api('/api/people/'+s.id+'/consent-log',{method:'DELETE',json:{confirm:true}});
+  assert.deepEqual((await api('/api/people/'+s.id+'/contact')).body.log,[]);
+  require('../backups').restore(beforePurge);
+  assert.equal((await api('/api/people/'+s.id+'/contact')).body.contact,null);
+  assert.deepEqual((await api('/api/people/'+s.id+'/contact')).body.log,[],'gelöschte Nachweise dürfen durch Restore nicht zurückkehren');
+});
+
+test('Einladungsexport validiert Eventfilter und begrenzt Empfänger auf das gewählte Event', async()=>{
+  const first=Shooters.create({name:'Nur Alt',gender:'w'}),C=require('../privacy').Contacts;
+  C.save(first.id,consentData);
+  const old=Events.active().id;Events.start({title:'Neu',year:2027,previous_event_id:old});
+  const second=Shooters.create({name:'Nur Neu',gender:'m'});C.save(second.id,{...consentData,email:'neu@example.org'});
+  assert.equal((await api('/api/invitations?event_id=abc')).response.status,400);
+  assert.deepEqual((await api('/api/invitations?event_id='+old)).body.map(r=>r.name),['Nur Alt']);
+  assert.deepEqual((await api('/api/invitations?event_id='+Events.active().id)).body.map(r=>r.name),['Nur Neu']);
 });
 
 test('Anmeldung, CSRF-Schutz und veralteter Eventkontext werden serverseitig geprüft', async () => {
@@ -598,6 +633,41 @@ test('Anmeldung, CSRF-Schutz und veralteter Eventkontext werden serverseitig gep
   const Auth=require('../auth');
   assert.equal(Auth.protectedTransport({socket:{remoteAddress:'192.168.1.5'}}),false);
   assert.equal(Auth.protectedTransport({socket:{remoteAddress:'192.168.1.5',encrypted:true}}),true);
+  let secureCookie='';const secureRequest={socket:{remoteAddress:'192.0.2.10',encrypted:true},headers:{}};
+  Auth.login(secureRequest,{setHeader:(name,value)=>{if(name==='Set-Cookie')secureCookie=value;}},'test-password-12345');assert.match(secureCookie,/; Secure$/);
+  const blockedRequest={socket:{remoteAddress:'192.0.2.11',encrypted:true},headers:{}};
+  for(let i=0;i<5;i++)assert.throws(()=>Auth.login(blockedRequest,{setHeader(){}},'falsch'),/Anmeldung fehlgeschlagen/);
+  assert.throws(()=>Auth.login(blockedRequest,{setHeader(){}},'test-password-12345'),/Zu viele Versuche/);
+  const page=await fetch(baseUrl+'/');assert.match(page.headers.get('content-security-policy'),/default-src 'self'/);
+  const appSource=await (await fetch(baseUrl+'/app.js')).text();assert.match(appSource,/script\.integrity = 'sha512-/);
+  await api('/api/auth/logout',{method:'POST',json:{}});
+  assert.equal((await fetch(baseUrl+'/api/people',{headers:{Cookie:cookie}})).status,401);
+});
+
+test('Ein während des Body-Uploads gewechseltes Event weist den alten Request zurück',async()=>{
+  const old=Events.active(),payload=JSON.stringify({name:'Darf nicht landen',gender:'m'}),url=new URL(baseUrl+'/api/shooters');
+  let request;
+  const responsePromise=new Promise((resolve,reject)=>{
+    request=http.request(url,{method:'POST',headers:{Cookie:cookie,'X-Schuetzen-Request':'1','X-Event-Id':String(old.id),'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload)}},response=>{
+      let body='';response.on('data',chunk=>body+=chunk);response.on('end',()=>resolve({status:response.statusCode,body}));
+    });request.on('error',reject);request.write(payload.slice(0,1));
+  });
+  await new Promise(resolve=>setTimeout(resolve,40));
+  Events.start({title:'Parallel neu',year:2027,previous_event_id:old.id});
+  request.end(payload.slice(1));
+  const response=await responsePromise;
+  assert.equal(response.status,409,response.body);
+  assert.equal(People.list('Darf nicht landen').length,0);
+});
+
+test('Fehlerhafte Tabellenimport-Zeilen hinterlassen keine persistenten Teilobjekte',async()=>{
+  const result=await api('/api/import',{method:'POST',json:{rows:[{name:'Rollback Person',gender:'w',discipline:'Rollback Disziplin',round:0,points:90}]}});
+  assert.equal(result.body.errors.length,1);
+  assert.deepEqual(result.body.created,{shooters:0,disciplines:0,results:0});
+  assert.equal(People.list('Rollback Person').length,0);
+  assert.equal(Disciplines.findByName('Rollback Disziplin'),undefined);
+  const blank=await api('/api/import',{method:'POST',json:{rows:[{name:'Leerwert',gender:'w',discipline:'Test',points:''}]}});
+  assert.equal(blank.body.errors.length,1);assert.equal(People.list('Leerwert').length,0);
 });
 
 test('Vollrestore erhält spätere Widerrufe und sperrt andere Kontaktfreigaben bis zur erneuten Prüfung', async () => {
@@ -605,8 +675,9 @@ test('Vollrestore erhält spätere Widerrufe und sperrt andere Kontaktfreigaben 
   const s=Shooters.create({name:'Widerruf',gender:'w'}),other=Shooters.create({name:'Weiterer Kontakt',gender:'m'}),remoteErase=Shooters.create({name:'Extern gelöscht',gender:'w'});
   C.save(s.id,consentData);C.save(other.id,{...consentData,email:'other@example.org'});C.save(remoteErase.id,{...consentData,email:'erase@example.org'});
   const backup=B.bundle(B.create('test'));
-  assert.equal(backup.version,2);
+  assert.equal(backup.version,3);
   backup.privacy_journal.entries.push({uuid:remoteErase.uuid,action:'erase',at:new Date(Date.now()+1000).toISOString()});
+  backup.manifest.privacy_sha256=createHash('sha256').update(JSON.stringify(backup.privacy_journal)).digest('hex');
   C.revoke(s.id);
   const result=B.restore(backup);assert.equal(result.privacy_review,true);
   assert.equal(C.get(s.id).contact,null);
@@ -621,9 +692,14 @@ test('Vollrestore erhält spätere Widerrufe und sperrt andere Kontaktfreigaben 
 });
 
 test('Beschädigte Backups verändern keine Daten; fehlgeschlagener Eventwechsel bleibt vollständig zurückgerollt', () => {
-  const B=require('../backups');Shooters.create({name:'Erhalten',gender:'m'});
+  const B=require('../backups'),person=Shooters.create({name:'Erhalten',gender:'m'});
   const bundle=B.bundle(B.create('test'));
   const before=JSON.stringify(People.list());
+  const journalTampered=structuredClone(bundle);
+  journalTampered.privacy_journal.entries.push({uuid:person.uuid,action:'erase',at:new Date().toISOString()});
+  assert.throws(()=>B.inspect(journalTampered),/Datenschutzprotokoll-Prüfsumme/);
+  const missingJournal=B.create('fehlendes-journal');fs.rmSync(path.join(require('../storage').BACKUP_DIR,missingJournal+'.privacy.json'));
+  assert.throws(()=>B.bundle(missingJournal),/Datenschutzprotokoll.*fehlt/);
   bundle.manifest.sha256='00';assert.throws(()=>B.restore(bundle),/Prüfsumme/);
   assert.equal(JSON.stringify(People.list()),before);
   const event=Events.active();
@@ -634,6 +710,29 @@ test('Beschädigte Backups verändern keine Daten; fehlgeschlagener Eventwechsel
   assert.equal(Events.active().id,event.id);
   assert.equal(Events.get(event.id).revision,0);
   assert.equal(Events.list().length,1);
+});
+
+test('Fehler während der eigentlichen Restore-Transaktion rollen alle Tabellen zurück',()=>{
+  const B=require('../backups'),person=Shooters.create({name:'Vor Restore',gender:'m'}),bundle=B.bundle(B.create('restore-rollback'));
+  const originalFile=path.join(testDataDir,'restore-source.sqlite'),file=path.join(testDataDir,'weakened-restore.sqlite');fs.writeFileSync(originalFile,Buffer.from(bundle.database,'base64'));
+  let source,target;
+  try {
+    source=new DatabaseSync(originalFile,{readOnly:true});target=new DatabaseSync(file);
+    const names=source.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(row=>row.name);
+    const quote=value=>'"'+value.replaceAll('"','""')+'"';
+    for(const name of names) {
+      const columns=source.prepare('PRAGMA table_info('+quote(name)+')').all(),primary=columns.filter(column=>column.pk).sort((a,b)=>a.pk-b.pk);
+      const definitions=columns.map(column=>quote(column.name)+' '+column.type+(column.notnull?' NOT NULL':''));
+      if(primary.length)definitions.push('PRIMARY KEY ('+primary.map(column=>quote(column.name)).join(',')+')');
+      target.exec('CREATE TABLE '+quote(name)+' ('+definitions.join(',')+')');
+      const insert=target.prepare('INSERT INTO '+quote(name)+' ('+columns.map(column=>quote(column.name)).join(',')+') VALUES ('+columns.map(()=>'?').join(',')+')');
+      for(const row of source.prepare('SELECT * FROM '+quote(name)).all())insert.run(...columns.map(column=>row[column.name]));
+    }
+    target.prepare("UPDATE shooters SET gender='x'").run();target.exec('PRAGMA user_version=3');source.close();source=null;target.close();target=null;
+    const bytes=fs.readFileSync(file);bundle.database=bytes.toString('base64');bundle.manifest.sha256=createHash('sha256').update(bytes).digest('hex');
+    assert.throws(()=>B.restore(bundle));
+    assert.equal(People.get(person.id).name,'Vor Restore');assert.equal(People.get(person.id).gender,'m');assert.equal(Events.list().length,1);
+  } finally {if(source)source.close();if(target)target.close();for(const item of [originalFile,file])if(fs.existsSync(item))fs.rmSync(item);}
 });
 
 test('Löschungen werden auch nach Restore auf Namen und verwaltete Archive angewendet', () => {
@@ -647,6 +746,36 @@ test('Löschungen werden auch nach Restore auf Namen und verwaltete Archive ange
   assert.equal(People.get(s.id).name,'Gelöschter Teilnehmer');
   assert.equal(Shooters.list()[0].name,'Gelöschter Teilnehmer');
   assert.throws(()=>P.Contacts.save(s.id,consentData),/nicht verfügbar/);
+});
+
+test('Löschung erkennt UUID-lose Archive über frühere Namen und arbeitet bei defekten Archiven nicht teilweise',()=>{
+  const P=require('../privacy'),s=Shooters.create({name:'Früherer Name',gender:'w'}),old=Events.active().id;
+  Events.start({title:'Neu',year:2027,previous_event_id:old});People.update(s.id,{name:'Neuer Name',gender:'w'});
+  const legacy=path.join(ARCHIVE_DIR,'legacy-name.json');
+  fs.writeFileSync(legacy,JSON.stringify({shooters:[{name:'Früherer Name'}]}));
+  P.Contacts.erase(s.id);assert.equal(fs.existsSync(legacy),false);
+
+  const other=Shooters.create({name:'Alter aktiver Name',gender:'m'}),matching=path.join(ARCHIVE_DIR,'matching.json'),broken=path.join(ARCHIVE_DIR,'broken.json');
+  fs.writeFileSync(matching,JSON.stringify({shooters:[{id:other.id,name:'Alter aktiver Name'}]}));People.update(other.id,{name:'Noch vorhanden',gender:'m'});fs.writeFileSync(broken,'{');
+  assert.throws(()=>P.Contacts.erase(other.id),/Archivbereinigung fehlgeschlagen/);
+  assert.equal(fs.existsSync(matching),true);assert.equal(People.get(other.id).name,'Noch vorhanden');
+  fs.rmSync(broken);P.Contacts.erase(other.id);assert.equal(fs.existsSync(matching),false);
+});
+
+test('Datenschutzjournal erkennt eine fremde oder zurückgesetzte Datei',()=>{
+  const P=require('../privacy'),original=fs.readFileSync(P.JOURNAL,'utf8'),parsed=JSON.parse(original);let valid=original;
+  try {
+    fs.writeFileSync(P.JOURNAL,JSON.stringify({...parsed,id:randomUUID()}));
+    assert.throws(()=>P.journal(),/gehört nicht/);
+    fs.writeFileSync(P.JOURNAL,original);
+    const s=Shooters.create({name:'Journaltest',gender:'m'});P.Contacts.revoke(s.id);P.Contacts.revoke(s.id);
+    const current=fs.readFileSync(P.JOURNAL,'utf8'),shortened=JSON.parse(current);valid=current;shortened.entries.pop();
+    const revokes=JSON.parse(current).entries.filter(entry=>entry.uuid===s.uuid&&entry.action==='revoke');assert.equal(new Set(revokes.map(entry=>entry.at)).size,2);
+    fs.writeFileSync(P.JOURNAL,JSON.stringify(shortened));
+    assert.throws(()=>P.journal(),/zurückgesetzt/);
+    fs.writeFileSync(P.JOURNAL,current);
+    assert.doesNotThrow(()=>P.journal());
+  } finally {fs.writeFileSync(P.JOURNAL,valid);}
 });
 
 test('Legacy-IDs und gleiche Namen werden nicht automatisch als dieselbe Person übernommen', () => {

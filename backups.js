@@ -16,7 +16,11 @@ function safeFile(name) {
 function create(label='manuell') {
   const name=snapshot(label);
   const localFile=safeFile(name),privacy=require('./privacy');
-  atomicWrite(localFile+'.privacy.json',JSON.stringify(privacy.journal()));
+  const journal=privacy.journal(),journalContent=JSON.stringify(journal);
+  atomicWrite(localFile+'.privacy.json',journalContent);
+  const manifest=JSON.parse(fs.readFileSync(localFile+'.json','utf8'));
+  manifest.privacy_sha256=createHash('sha256').update(journalContent).digest('hex');
+  atomicWrite(localFile+'.json',JSON.stringify(manifest));
   lastError=null;
   try {
     if(external) {
@@ -35,13 +39,17 @@ function status() { return {files:list(),last_local:list()[0] || null,last_exter
 function bundle(name) {
   const file=safeFile(name);
   const privacyFile=file+'.privacy.json';
-  return {format:'schuetzen-system-backup',version:fs.existsSync(privacyFile)?2:1,manifest:JSON.parse(fs.readFileSync(file+'.json','utf8')),database:fs.readFileSync(file).toString('base64'),privacy_journal:fs.existsSync(privacyFile)?JSON.parse(fs.readFileSync(privacyFile,'utf8')):undefined};
+  const manifest=JSON.parse(fs.readFileSync(file+'.json','utf8'));
+  if(manifest.privacy_sha256 && !fs.existsSync(privacyFile)) invalid('Datenschutzprotokoll zum Backup fehlt');
+  return {format:'schuetzen-system-backup',version:fs.existsSync(privacyFile)?(manifest.privacy_sha256?3:2):1,manifest,database:fs.readFileSync(file).toString('base64'),privacy_journal:fs.existsSync(privacyFile)?JSON.parse(fs.readFileSync(privacyFile,'utf8')):undefined};
 }
 function inspect(bundleData, consume) {
-  if(!bundleData || bundleData.format!=='schuetzen-system-backup' || ![1,2].includes(bundleData.version) || typeof bundleData.database!=='string') invalid('Kein gültiges Systembackup');
-  if(bundleData.version===2) {
-    try { require('./privacy').validateJournal(bundleData.privacy_journal); }
+  if(!bundleData || bundleData.format!=='schuetzen-system-backup' || ![1,2,3].includes(bundleData.version) || typeof bundleData.database!=='string') invalid('Kein gültiges Systembackup');
+  if(bundleData.version>=2) {
+    let journal;
+    try { journal=require('./privacy').validateJournal(bundleData.privacy_journal); }
     catch { invalid('Datenschutzprotokoll im Backup ist beschädigt'); }
+    if(bundleData.version===3 && createHash('sha256').update(JSON.stringify(journal)).digest('hex')!==bundleData.manifest?.privacy_sha256) invalid('Datenschutzprotokoll-Prüfsumme stimmt nicht');
   }
   const bytes=Buffer.from(bundleData.database,'base64');
   if(bytes.length>100*1024*1024 || createHash('sha256').update(bytes).digest('hex')!==bundleData.manifest?.sha256) invalid('Backup-Prüfsumme stimmt nicht');
@@ -69,7 +77,7 @@ function connectionColumns(connection,table) {
 }
 function restore(bundleData) {
   return inspect(bundleData,(source,summary)=>{
-    const privacy=require('./privacy'); privacy.journal();
+    const privacy=require('./privacy'),currentJournal=privacy.journal();
     const backup=create('vor-restore');
     // Copy validated rows in ONE transaction. SQLite commits/recovery handle power
     // failures; the open Windows database file never needs to be renamed.
@@ -80,12 +88,12 @@ function restore(bundleData) {
         const insert=db.prepare('INSERT INTO '+table+' ('+columns.join(',')+') VALUES ('+columns.map(()=>'?').join(',')+')');
         for(const row of source.prepare('SELECT * FROM '+table).all()) insert.run(...columns.map(c=>row[c]));
       }
-      privacy.replay();
+      privacy.replayEntries(currentJournal.entries);
       if(bundleData.privacy_journal) privacy.replayEntries(bundleData.privacy_journal.entries);
       // A backup cannot prove absence of later withdrawals on another machine.
       run("UPDATE contacts SET status='review'");
       setSetting('privacy_review','1');
-      setSetting('journal_id',privacy.journal().id);
+      privacy.checkpointJournal(currentJournal);
       checkDatabase(db);
     });
     const warnings=[];
@@ -93,6 +101,7 @@ function restore(bundleData) {
       try {privacy.mergeJournal(bundleData.privacy_journal);}
       catch {warnings.push('Daten wiederhergestellt; Datenschutzprotokoll konnte nicht zusammengeführt werden. Prüfung gesperrt lassen und Protokoll separat sichern.');}
     } else warnings.push('Älteres Backup ohne eingebettetes Datenschutzprotokoll. Löschungen anhand der Vereinsunterlagen vollständig abgleichen.');
+    if(bundleData.version===2) warnings.push('Älteres Backup mit noch nicht separat geprüfter Journal-Prüfsumme. Datenschutzprotokoll anhand der Vereinsunterlagen abgleichen.');
     return {ok:true,backup,summary,privacy_review:true,warnings};
   });
 }
@@ -126,4 +135,4 @@ function startTimer() {
   };
   tick(); const timer=setInterval(tick,5*60*1000);timer.unref();return timer;
 }
-module.exports={create,list,status,bundle,inspect,restore,reviewed,startTimer,safeFile};
+module.exports={create,list,status,bundle,inspect,restore,reviewed,startTimer,prune,safeFile};

@@ -20,7 +20,7 @@ Das Serverfenster bleibt während des Betriebs geöffnet. Mehrere Helfer benutze
 - **Stammdaten bearbeiten:** Historische Namen bleiben erhalten. Bearbeiten eines aktiven Teilnehmers aktualisiert dessen aktuelle Teilnahme und Stamm.
 - **Aus Event entfernen:** Entfernt aktuelle Teilnahme und deren Ergebnisse; Stamm und frühere Events bleiben erhalten.
 - **Archivieren:** Verhindert neue Anmeldungen und Einladungsexporte bis zur Reaktivierung. Die Historie bleibt bestehen.
-- **Historie:** Jahr, Event, damalige Startnummer und Abschlussplätze je Disziplin. Ohne Ergebnis: „Angemeldet, ohne Ergebnis“.
+- **Historie:** Jahr, Event, damaliger Name, damalige Startnummer und Abschlussplätze je Disziplin. Ohne Ergebnis: „Angemeldet, ohne Ergebnis“.
 
 „Bisheriges Event abschließen und neues starten“ erstellt ein Vorabbackup, speichert Abschlussplätze und öffnet ein leeres Event. Der Stamm bleibt erhalten. Disziplinen werden für das neue Event neu angelegt. Wiederholte Anfragen mit dem alten Event werden abgewiesen; Helfer mit einer veralteten Ansicht müssen neu laden.
 
@@ -34,7 +34,7 @@ Das Live-Dashboard unter `/dashboard` bleibt ohne Anmeldung erreichbar. Es zeigt
 
 Einladungsexporte enthalten Name und Adresse nicht archivierter Personen mit freigegebener Einwilligung und mindestens einer Eventanmeldung, optional nach Event gefiltert. Gleiche Adressen werden zusammengefasst. Kein automatischer Versand. Vor jedem Versand aktuell exportieren, BCC oder ein geeignetes Versandsystem verwenden und alte Empfängerdateien löschen.
 
-Widerruf entfernt den nutzbaren Kontakt sofort. Text, Belegverweis und Widerrufsdokumentation bleiben separat zur Nachweisführung erhalten. „Personendaten löschen“ entfernt Name und Kontakt aus Stamm und Teilnahmen. Ergebnisse, Geschlechtsangabe und Eventzusammenhang bleiben mit dem Namen „Gelöschter Teilnehmer“ bestehen; das garantiert bei kleinen Gruppen keine vollständige Anonymität. Betroffene verwaltete Eventdateien werden entfernt und können bereinigt neu exportiert werden. Bei alten Dateien ohne UUID können alle Dateien mit demselben Namen betroffen sein. Extern weitergegebene Kopien müssen organisatorisch berücksichtigt werden.
+Widerruf entfernt den nutzbaren Kontakt sofort. Text, Belegverweis und Widerrufsdokumentation bleiben separat zur Nachweisführung erhalten. Nach Ablauf der vereinseigenen Nachweisfrist können diese Protokolle über „Alte Einwilligungsnachweise löschen“ entfernt werden; eine noch aktive Einwilligung muss zuerst widerrufen werden. „Personendaten löschen“ entfernt Name und Kontakt aus Stamm und Teilnahmen. Ergebnisse, Geschlechtsangabe und Eventzusammenhang bleiben mit dem Namen „Gelöschter Teilnehmer“ bestehen; das garantiert bei kleinen Gruppen keine vollständige Anonymität. Betroffene verwaltete Eventdateien werden entfernt und können bereinigt neu exportiert werden. UUID-lose Altarchive werden dazu gegen sämtliche gespeicherten historischen Namen geprüft; bei Namensgleichheit können mehrere alte Dateien betroffen sein. Kann eine Archivdatei nicht sicher gelesen werden, wird vor jeder Dateilöschung abgebrochen und der Fehler angezeigt. Extern weitergegebene Kopien müssen organisatorisch berücksichtigt werden.
 
 Rechtsgrundlagen, Informationen an Betroffene und Fristen für Stamm, Ergebnisgeschichte und Nachweise legt der Verein getrennt fest. Die Einladungseinwilligung deckt nicht automatisch jede Verarbeitung ab. Vor jedem Event alte Kontakte/Stammdaten prüfen und Nachweise nach dem festgelegten Löschkonzept bereinigen. Die App zertifiziert keine DSGVO-Konformität.
 
@@ -56,17 +56,17 @@ Danach `https://SERVERNAME:3000` verwenden. Zertifikat und Name müssen überein
 
 ## Eventexport und Import
 
-Ein Eventexport ist JSON, Version 2, mit stabilen Personen-/Event-UUIDs, damaligen Namen, Nummern, Ergebnissen und letzter Abschlusswertung. Keine Kontakte oder Einwilligungen; dennoch personenbezogene Daten.
+Ein Eventexport ist JSON, Version 3, mit stabilen Personen-/Event-UUIDs, damaligen Namen, Nummern, Ergebnissen sowie allen gespeicherten Abschlussversionen und Korrekturbegründungen. Keine Kontakte oder Einwilligungen; dennoch personenbezogene Daten.
 
 Unter „Import“ die Datei auswählen. Die Vorschau verlangt Jahr und für jede Person Zuordnung oder Neuanlage. Übereinstimmende UUIDs werden vorgegeben; Namen allein führen niemals automatisch zusammen. Bestätigte Zuordnungen abweichender UUIDs werden für weitere Importe gespeichert. Das Event ergänzt die Historie, aktives Event und Kontakte bleiben erhalten. Vorhandene Events und wiederholte gleiche Imports werden abgewiesen.
 
-Alte Saisonarchive bleiben lesbar. Numerische IDs gelten nur innerhalb der Datei. Fehlende Nummern werden deterministisch ergänzt. Berechnete Plätze aus alten oder noch nicht abgeschlossenen Events werden als rekonstruiert gekennzeichnet.
+Alte Saisonarchive der bisherigen Formate bleiben lesbar. Numerische IDs gelten nur innerhalb der Datei. Fehlende Nummern werden deterministisch ergänzt. Da Eventarchive der Version 2 nur die letzte Abschlusswertung enthielten, werden sie beim Import als eine rekonstruierte Abschlussversion gespeichert. Berechnete Plätze aus noch älteren oder noch nicht abgeschlossenen Events werden ebenfalls als rekonstruiert gekennzeichnet.
 
-CSV/Excel ergänzt das aktive Event. Bekannte Personen vorher anmelden; vorhandene Stammnamen werden nicht automatisch neu angelegt. Bei Namensgleichheit Startnummer verwenden. Excel lädt SheetJS 0.18.5 von cdnjs mit fest hinterlegter SHA-512-Integritätsprüfung und ohne Referrer; CSV und JSON funktionieren vollständig offline und sind aus Datenschutzsicht vorzuziehen.
+CSV/Excel ergänzt das aktive Event. Bekannte Personen vorher anmelden; vorhandene Stammnamen werden nicht automatisch neu angelegt. Bei Namensgleichheit Startnummer verwenden. Jede Zeile wird vollständig geprüft und atomar gespeichert; eine fehlerhafte Zeile hinterlässt weder Person noch Disziplin oder Teilergebnis. Excel lädt SheetJS 0.18.5 von cdnjs mit fest hinterlegter SHA-512-Integritätsprüfung und ohne Referrer; CSV und JSON funktionieren vollständig offline und sind aus Datenschutzsicht vorzuziehen.
 
 ## Vollbackups
 
-Vollbackups enthalten Stamm, Kontakte, Nachweise, alle Events und Wertungsversionen. Sie werden als konsistente SQLite-Kopie mit `VACUUM INTO` erzeugt, auf Integrität und Fremdschlüssel geprüft und mit SHA-256-Prüfsumme versehen. Gelöschte freie SQLite-Seiten werden nicht kopiert.
+Vollbackups enthalten Stamm, Kontakte, Nachweise, alle Events und Wertungsversionen. Sie werden als konsistente SQLite-Kopie mit `VACUUM INTO` erzeugt, auf Integrität und Fremdschlüssel geprüft und mit SHA-256-Prüfsumme versehen. Ab Backupformat 3 besitzt auch das eingebettete Datenschutzjournal eine eigene SHA-256-Prüfsumme. Diese Prüfsummen erkennen Beschädigungen, sind aber keine digitale Signatur gegen eine Person, die Backup und Manifest gemeinsam manipulieren kann. Gelöschte freie SQLite-Seiten werden nicht kopiert.
 
 Sicherung beim regulären Start und danach spätestens alle fünf Minuten nach Änderungen. Zusätzlich vor Migration, Eventwechsel, Korrekturmodus, Eventimport und Vollrestore sowie nach Eventwechsel. Manuell über „Vollbackup erstellen“. Änderungen seit dem letzten erfolgreichen Backup können bei abruptem Ausfall verloren gehen.
 
@@ -88,7 +88,7 @@ Backup-Links liefern portables JSON mit eingebetteter SQLite-Kopie und Prüfsumm
 
 Danach werden Sitzungen beendet und Dashboard sowie normaler Eventbetrieb gesperrt. Neu anmelden, im Schützenstamm nötige Bereinigungen ausführen und unter „Saison & Netzwerk“ den Datenschutzabgleich dokumentieren. Kontaktfreigaben aus dem Backup bleiben auf „Prüfung“ und benötigen pro Person erneut einen belegten Nachweis.
 
-`data/privacy-journal.json` enthält UUID, Zeitpunkt und Aktion von Widerrufen/Namenslöschungen. Es wird vor der Änderung dauerhaft geschrieben, bei jedem Start erneut angewendet und beim Restore nicht zurückgesetzt. Es enthält selbst schutzbedürftige pseudonyme Daten. Fehlt es auf einer bestehenden Installation oder ist es beschädigt, stoppt der Start. Bei beendetem Server das aktuelle separat gesicherte Protokoll wiederherstellen. Auf Ersatzgeräten die neueste Protokollkopie vor dem Restore in den Datenordner legen. Ein Backup kann spätere Widerrufe nicht ausschließen: fehlende Änderungen vor Freigabe anhand der Vereinsunterlagen abgleichen.
+`data/privacy-journal.json` enthält UUID, Zeitpunkt und Aktion von Widerrufen, Namenslöschungen und bewusst entfernten Einwilligungsnachweisen. Es wird vor der Änderung dauerhaft geschrieben, bei jedem Start erneut angewendet und beim Restore nicht zurückgesetzt. Journal-ID, bestätigte Eintragszahl und Hash des bestätigten Präfixes werden in der Datenbank gegengeprüft; eine fremde, veränderte oder zurückgesetzte Datei stoppt den Start. Ein nach einem Absturz bereits vorausgeschriebener gültiger Eintrag wird dagegen erneut angewendet und anschließend bestätigt. Das Journal enthält selbst schutzbedürftige pseudonyme Daten. Bei beendetem Server das aktuelle separat gesicherte Protokoll wiederherstellen. Auf Ersatzgeräten die neueste Protokollkopie vor dem ersten Start beziehungsweise Restore in den Datenordner legen. Ein Backup kann spätere Widerrufe nicht ausschließen: fehlende Änderungen vor Freigabe anhand der Vereinsunterlagen abgleichen.
 
 Externe Kopien bestehen aus `.sqlite`, `.sqlite.json` und `.sqlite.privacy.json`; zusätzlich wird die neueste Journaldatei als `privacy-journal.json` abgelegt. Zum Verpacken für den Upload:
 
@@ -112,4 +112,4 @@ Der gesamte Datenordner ist von Git ausgeschlossen. `SCHUETZEN_DATA_DIR` wählt 
 node --test --test-concurrency=1
 ```
 
-Die Tests verwenden ausschließlich temporäre Datenbanken. Sie prüfen Migration/Rückabwicklung, Wiederanmeldung, Startnummern, Historie, Zugriffsschutz, beschädigte Backups und Widerrufe/Löschungen nach Restore. `npm test` ruft denselben Befehl auf, sofern npm korrekt installiert ist.
+Die Tests verwenden ausschließlich temporäre Datenbanken. Sie prüfen unter anderem Migration/Rückabwicklung, Wiederanmeldung, Startnummern, vollständige Korrekturhistorien, atomare Tabellenimporte, einen parallelen Eventwechsel während eines laufenden Uploads, Zugriffsschutz, Journalrücksetzungen, beschädigte Backups, externe Sicherung/Rotation/Verpackung sowie Widerrufe und Löschungen nach Restore. `npm test` ruft denselben Befehl auf, sofern npm korrekt installiert ist.

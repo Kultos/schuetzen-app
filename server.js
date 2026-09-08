@@ -8,7 +8,7 @@ const https = require('node:https');
 const Auth = require('./auth');
 const Backups = require('./backups');
 const { Contacts } = require('./privacy');
-const { People, Events, all, setting, transaction } = require('./db');
+const { People, Events, setting, transaction } = require('./db');
 const Archives = require('./archives');
 
 const {
@@ -90,6 +90,12 @@ function readBody(req) {
     req.on('error', reject);
   });
 }
+function assertCurrentEvent(req) {
+  if(Number(req.headers['x-event-id'])!==Events.active().id) {
+    const error=new Error('Das aktive Event hat sich geändert. Bitte die Seite neu laden.');error.status=409;throw error;
+  }
+}
+async function readEventBody(req) {const body=await readBody(req);assertCurrentEvent(req);return body;}
 
 function serveStatic(req, res, pathname) {
   let filePath = path.join(PUBLIC_DIR, pathname === '/' ? 'index.html' : pathname);
@@ -148,8 +154,8 @@ async function handleApi(req, res, pathname, query) {
   if(!Auth.protectedTransport(req)) return sendError(res,403,'Verwaltung im LAN erfordert HTTPS. Direkt am Server ist localhost verfügbar.');
   if(!Auth.session(req)) return sendError(res,401,'Bitte anmelden');
   const eventWrite=method!=='GET' && (/^\/api\/(shooters|disciplines|results)(\/|$)/.test(pathname) || pathname==='/api/import' || pathname==='/api/season' || pathname==='/api/season/reset' || /^\/api\/people\/\d+\/register$/.test(pathname));
-  if(eventWrite && Number(req.headers['x-event-id'])!==Events.active().id) return sendError(res,409,'Das aktive Event hat sich geändert. Bitte die Seite neu laden.');
-  const reviewAllowed=['/api/backups','/api/backup/preview','/api/backup/restore','/api/privacy/review','/api/people'].includes(pathname) || /^\/api\/backups\//.test(pathname) || /^\/api\/people\/\d+(\/contact|\/erase|\/history)?$/.test(pathname);
+  if(eventWrite) assertCurrentEvent(req);
+  const reviewAllowed=['/api/backups','/api/backup/preview','/api/backup/restore','/api/privacy/review','/api/people'].includes(pathname) || /^\/api\/backups\//.test(pathname) || /^\/api\/people\/\d+(\/contact|\/consent-log|\/erase|\/history)?$/.test(pathname);
   if(setting('privacy_review')==='1' && !reviewAllowed) return sendError(res,423,'Datenschutzabgleich nach Restore erforderlich');
   let extra;
   if(pathname==='/api/people' && method==='GET') return sendJSON(res,200,People.list(query.search));
@@ -157,7 +163,7 @@ async function handleApi(req, res, pathname, query) {
   if((extra=pathname.match(/^\/api\/people\/(\d+)$/)) && method==='PUT') return sendJSON(res,200,People.update(Number(extra[1]),await readBody(req)));
   if((extra=pathname.match(/^\/api\/people\/(\d+)\/history$/)) && method==='GET') return sendJSON(res,200,People.history(Number(extra[1])));
   if((extra=pathname.match(/^\/api\/people\/(\d+)\/register$/)) && method==='POST') {
-    const b=await readBody(req);return sendJSON(res,201,Shooters.register(Number(extra[1]),b.start_number));
+    const b=await readEventBody(req);return sendJSON(res,201,Shooters.register(Number(extra[1]),b.start_number));
   }
   if((extra=pathname.match(/^\/api\/people\/(\d+)\/archive$/)) && method==='POST') {
     const b=await readBody(req);People.archive(Number(extra[1]),b.archived===true);return sendJSON(res,200,{ok:true});
@@ -168,15 +174,25 @@ async function handleApi(req, res, pathname, query) {
     if(method==='PUT') return sendJSON(res,200,Contacts.save(id,await readBody(req)));
     if(method==='DELETE') {Contacts.revoke(id);return sendJSON(res,200,{ok:true});}
   }
+  if((extra=pathname.match(/^\/api\/people\/(\d+)\/consent-log$/)) && method==='DELETE') {
+    const b=await readBody(req);if(b.confirm!==true) return sendError(res,400,'Löschbestätigung fehlt');
+    Contacts.purgeLog(Number(extra[1]));return sendJSON(res,200,{ok:true});
+  }
   if((extra=pathname.match(/^\/api\/people\/(\d+)\/erase$/)) && method==='POST') {
     const b=await readBody(req);if(b.confirm!==true) return sendError(res,400,'Löschbestätigung fehlt');
     Contacts.erase(Number(extra[1]));return sendJSON(res,200,{ok:true});
   }
-  if(pathname==='/api/invitations' && method==='GET') return sendJSON(res,200,Contacts.invitations(query.event_id ? Number(query.event_id) : null));
+  if(pathname==='/api/invitations' && method==='GET') {
+    let eventId=null;
+    if(query.event_id!==undefined && query.event_id!=='') {
+      eventId=parsePositiveInteger(query.event_id);if(!eventId) return sendError(res,400,'event_id muss eine positive ganze Zahl sein');Events.get(eventId);
+    }
+    return sendJSON(res,200,Contacts.invitations(eventId));
+  }
   if(pathname==='/api/events' && method==='GET') return sendJSON(res,200,Events.list());
   if((extra=pathname.match(/^\/api\/events\/(\d+)$/))) {
     const id=Number(extra[1]);
-    if(method==='GET') return sendJSON(res,200,{...fullExport(id),closures:all('SELECT * FROM closures WHERE event_id=? ORDER BY revision',[id])});
+    if(method==='GET') return sendJSON(res,200,fullExport(id));
     if(method==='PUT') return sendJSON(res,200,Events.metadata(id,await readBody(req)));
   }
   if((extra=pathname.match(/^\/api\/events\/(\d+)\/correction$/)) && method==='POST') {
@@ -206,7 +222,7 @@ async function handleApi(req, res, pathname, query) {
     return sendJSON(res, 200, { start_number: Shooters.nextStartNumber() });
   }
   if (pathname === '/api/shooters' && method === 'POST') {
-    const body = await readBody(req);
+    const body = await readEventBody(req);
     const name = normalizedName(body.name);
     if (!name || !body.gender) return sendError(res, 400, 'name und gender erforderlich');
     if (!['m', 'w'].includes(body.gender)) return sendError(res, 400, "gender muss 'm' oder 'w' sein");
@@ -226,7 +242,7 @@ async function handleApi(req, res, pathname, query) {
   if ((m = pathname.match(/^\/api\/shooters\/(\d+)$/))) {
     const id = Number(m[1]);
     if (method === 'PUT') {
-      const body = await readBody(req);
+      const body = await readEventBody(req);
       const name = normalizedName(body.name);
       if (!name || !['m', 'w'].includes(body.gender)) {
         return sendError(res, 400, 'Gültiger Name und gender erforderlich');
@@ -261,7 +277,7 @@ async function handleApi(req, res, pathname, query) {
     return sendJSON(res, 200, Disciplines.list());
   }
   if (pathname === '/api/disciplines' && method === 'POST') {
-    const body = await readBody(req);
+    const body = await readEventBody(req);
     const name = normalizedName(body.name);
     if (!name) return sendError(res, 400, 'name erforderlich');
     if (Disciplines.findByName(name)) return sendError(res, 409, 'Disziplin existiert bereits');
@@ -270,7 +286,7 @@ async function handleApi(req, res, pathname, query) {
   if ((m = pathname.match(/^\/api\/disciplines\/(\d+)$/))) {
     const id = Number(m[1]);
     if (method === 'PUT') {
-      const body = await readBody(req);
+      const body = await readEventBody(req);
       const name = normalizedName(body.name);
       if (!name) return sendError(res, 400, 'name erforderlich');
       const current = Disciplines.findById(id);
@@ -294,7 +310,7 @@ async function handleApi(req, res, pathname, query) {
     return sendJSON(res, 200, Results.listForShooterDiscipline(shooterId, disciplineId));
   }
   if (pathname === '/api/results' && method === 'POST') {
-    const body = await readBody(req);
+    const body = await readEventBody(req);
     const shooterId = parsePositiveInteger(body.shooter_id);
     const disciplineId = parsePositiveInteger(body.discipline_id);
     const points = parseFiniteNumber(body.points);
@@ -318,7 +334,7 @@ async function handleApi(req, res, pathname, query) {
   if ((m = pathname.match(/^\/api\/results\/(\d+)$/))) {
     const id = Number(m[1]);
     if (method === 'PUT') {
-      const body = await readBody(req);
+      const body = await readEventBody(req);
       if (!Results.findById(id)) return sendError(res, 404, 'Ergebnis nicht gefunden');
       const points = parseFiniteNumber(body.points);
       const roundNumber = parsePositiveInteger(body.round_number);
@@ -348,7 +364,7 @@ async function handleApi(req, res, pathname, query) {
 
   // ---- Import ----
   if (pathname === '/api/import' && method === 'POST') {
-    const body = await readBody(req);
+    const body = await readEventBody(req);
     const rows = Array.isArray(body.rows) ? body.rows : [];
     let created = { shooters: 0, disciplines: 0, results: 0 };
     let errors = [];
@@ -357,41 +373,39 @@ async function handleApi(req, res, pathname, query) {
         const name = String(row.name || '').trim();
         const genderRaw = String(row.gender || '').trim().toLowerCase();
         const disciplineName = String(row.discipline || '').trim();
-        const points = Number(row.points);
-        if (!name || !disciplineName || Number.isNaN(points)) {
+        const pointsRaw=String(row.points??'').trim(),points = Number(row.points);
+        if (!name || !disciplineName || !pointsRaw || !Number.isFinite(points)) {
           errors.push({ row: i + 1, message: 'Name, Disziplin oder Punkte fehlen/ungueltig' });
           continue;
         }
-        const gender = genderRaw.startsWith('w') || genderRaw.startsWith('f') ? 'w' : 'm';
-
-        const number=String(row.start_number??'').trim() ? parsePositiveInteger(row.start_number) : null;
-        let shooter = number ? Shooters.findByStartNumber(number) : Shooters.findByName(name);
-        if(shooter && shooter.name.toLocaleLowerCase('de')!==name.toLocaleLowerCase('de')) throw new Error('Startnummer gehört zu einem anderen Teilnehmer');
-        if (!shooter) {
-          if(People.list(name).some(p=>p.name.toLocaleLowerCase('de')===name.toLocaleLowerCase('de'))) throw new Error('Name ist im Schützenstamm vorhanden. Person zuerst ausdrücklich für das Event anmelden.');
-          const requestedStartNumber = String(row.start_number ?? '').trim()
-            ? parsePositiveInteger(row.start_number)
-            : Shooters.nextStartNumber();
-          if (!requestedStartNumber) throw new Error('Startnummer ist ungültig');
-          const conflict = Shooters.findByStartNumber(requestedStartNumber);
-          if (conflict) throw new Error(`Startnummer ${requestedStartNumber} ist bereits an ${conflict.name} vergeben`);
-          shooter = Shooters.create({ name, gender, start_number: requestedStartNumber });
-          created.shooters++;
-        } else if (String(row.start_number ?? '').trim()) {
-          const requestedStartNumber = parsePositiveInteger(row.start_number);
-          if (!requestedStartNumber) throw new Error('Startnummer ist ungültig');
-          if (shooter.start_number !== requestedStartNumber) {
-            throw new Error(`${name} ist bereits mit Startnummer ${shooter.start_number} erfasst`);
+        let gender;
+        if(genderRaw.startsWith('w')||genderRaw.startsWith('f')) gender='w';
+        else if(genderRaw.startsWith('m')) gender='m';
+        else throw new Error('Geschlecht muss m oder w sein');
+        const delta=transaction(()=>{
+          let shooters=0,disciplines=0;
+          const number=String(row.start_number??'').trim() ? parsePositiveInteger(row.start_number) : null;
+          let shooter = number ? Shooters.findByStartNumber(number) : Shooters.findByName(name);
+          if(shooter && shooter.name.toLocaleLowerCase('de')!==name.toLocaleLowerCase('de')) throw new Error('Startnummer gehört zu einem anderen Teilnehmer');
+          if (!shooter) {
+            if(People.list(name).some(p=>p.name.toLocaleLowerCase('de')===name.toLocaleLowerCase('de'))) throw new Error('Name ist im Schützenstamm vorhanden. Person zuerst ausdrücklich für das Event anmelden.');
+            const requestedStartNumber = String(row.start_number ?? '').trim() ? parsePositiveInteger(row.start_number) : Shooters.nextStartNumber();
+            if (!requestedStartNumber) throw new Error('Startnummer ist ungültig');
+            const conflict = Shooters.findByStartNumber(requestedStartNumber);
+            if (conflict) throw new Error(`Startnummer ${requestedStartNumber} ist bereits an ${conflict.name} vergeben`);
+            shooter = Shooters.register(People.create({name,gender}).id,requestedStartNumber);shooters=1;
+          } else if (String(row.start_number ?? '').trim()) {
+            const requestedStartNumber = parsePositiveInteger(row.start_number);
+            if (!requestedStartNumber) throw new Error('Startnummer ist ungültig');
+            if (shooter.start_number !== requestedStartNumber) throw new Error(`${name} ist bereits mit Startnummer ${shooter.start_number} erfasst`);
           }
-        }
-        let discipline = Disciplines.findByName(disciplineName);
-        if (!discipline) {
-          discipline = Disciplines.create({ name: disciplineName });
-          created.disciplines++;
-        }
-        const round_number = row.round ? Number(row.round) : Results.nextRoundNumber(shooter.id, discipline.id);
-        Results.create({ shooter_id: shooter.id, discipline_id: discipline.id, round_number, points });
-        created.results++;
+          let discipline = Disciplines.findByName(disciplineName);
+          if (!discipline) {discipline = Disciplines.create({ name: disciplineName });disciplines=1;}
+          const round_number = String(row.round??'').trim() ? Number(row.round) : Results.nextRoundNumber(shooter.id, discipline.id);
+          Results.create({ shooter_id: shooter.id, discipline_id: discipline.id, round_number, points });
+          return {shooters,disciplines,results:1};
+        });
+        for(const key of Object.keys(created)) created[key]+=delta[key];
       } catch (e) {
         errors.push({ row: i + 1, message: e.message });
       }
@@ -431,7 +445,7 @@ async function handleApi(req, res, pathname, query) {
     return sendJSON(res, 200, { title: Season.getTitle(), event: Events.active() });
   }
   if (pathname === '/api/season' && method === 'PUT') {
-    const body = await readBody(req);
+    const body = await readEventBody(req);
     const title = String(body.title || '').trim();
     if (title.length > 200) return sendError(res, 400, 'Der Titel darf höchstens 200 Zeichen lang sein');
     const event=Events.metadata(Events.active().id,{title,year:body.year});
@@ -440,7 +454,7 @@ async function handleApi(req, res, pathname, query) {
 
   // ---- Season reset mit Archiv ----
   if (pathname === '/api/season/reset' && method === 'POST') {
-    const body = await readBody(req);
+    const body = await readEventBody(req);
     return sendJSON(res, 200, resetSeason(body));
   }
   if (pathname === '/api/season/archives' && method === 'GET') {

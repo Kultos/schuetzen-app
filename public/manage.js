@@ -80,7 +80,8 @@ async function showHistory(p) {
   const root=detail('Historie: '+p.name),history=await api('/api/people/'+p.id+'/history');
   if(!history.length) root.append(el('p',{text:'Noch keine Event-Anmeldung.'}));
   for(const h of history) {
-    const card=el('article',{class:'card'},[el('h3',{text:(h.year||'Jahr offen')+' – '+(h.title||'Ohne Titel')}),el('p',{text:'Startnummer '+h.start_number+' · '+(h.result_count?'Ergebnisse vorhanden':'Angemeldet, ohne Ergebnis')+(h.reconstructed?' · Wertung rekonstruiert':'')})]);
+    const historicalName=h.historical_name!==p.name?' · damaliger Name: '+h.historical_name:'';
+    const card=el('article',{class:'card'},[el('h3',{text:(h.year||'Jahr offen')+' – '+(h.title||'Ohne Titel')}),el('p',{text:'Startnummer '+h.start_number+historicalName+' · '+(h.result_count?'Ergebnisse vorhanden':'Angemeldet, ohne Ergebnis')+(h.reconstructed?' · Wertung rekonstruiert':'')})]);
     for(const r of h.placements) card.append(el('p',{text:r.discipline+': Platz '+r.rank+' ('+formatPoints(r.best_points)+' Punkte)'}));
     if(h.status!=='closed') card.append(el('p',{text:'Event noch nicht abgeschlossen; keine endgültige Wertung.'}));
     root.append(card);
@@ -98,6 +99,11 @@ async function editContact(p) {
   root.append(form,action('Einwilligung widerrufen / E-Mail entfernen',async()=>{if(!confirm('Einladungsfreigabe widerrufen und E-Mail entfernen?'))return;await api('/api/people/'+p.id+'/contact',{method:'DELETE'});$('detailDialog').close();await loadPeople();}));
   root.append(el('h3',{text:'Dokumentation'}));
   for(const l of result.log) root.append(el('p',{text:l.created_at+' · '+l.action+' · '+l.details}));
+  if(result.log.length) root.append(action('Alte Einwilligungsnachweise löschen',async()=>{
+    if(c)throw new Error('Aktive Einwilligung zuerst widerrufen.');
+    if(!confirm('Einwilligungs- und Widerrufsnachweise dieser Person entsprechend dem Löschkonzept endgültig entfernen?'))return;
+    await api('/api/people/'+p.id+'/consent-log',json('DELETE',{confirm:true}));await editContact(p);
+  }));
 }
 $('invitationExport').onclick=async()=>{
   try {
@@ -140,7 +146,7 @@ async function startNextEvent() {
 }
 async function showEvent(id) {
   const a=await api('/api/events/'+id),root=detail((a.event.year||'Jahr offen')+' – '+a.event_title);
-  root.append(el('p',{text:'Status: '+a.event.status+' · Abschlussversion '+a.event.revision+' · Wertung: beste Serien, bei vollständigem Gleichstand alphabetisch.'}),action('Eventdatei herunterladen',()=>download('event-'+a.event.uuid+'.json',a)));
+  root.append(el('p',{text:'Status: '+a.event.status+' · Abschlussversion '+a.event.revision+' · Wertung: beste Serien, bei vollständigem Gleichstand alphabetisch.'}),action('Eventdatei herunterladen',()=>download('event-'+a.event.uuid+'-r'+a.event.revision+'.json',a)));
   for(const c of a.closures)root.append(el('p',{text:'Abschluss '+c.revision+': '+c.reason+' ('+c.created_at+')'}));
   if(a.event.status==='closed') {
     const reason=el('input',{placeholder:'Korrektur begründen',maxlength:'500'});

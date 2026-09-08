@@ -3,26 +3,32 @@ const fs=require('node:fs');
 const path=require('node:path');
 const {randomUUID,createHash}=require('node:crypto');
 const D=require('./db');
-const {all,get,run,transaction,atomicWrite,ARCHIVE_DIR,Events,People,Shooters,Disciplines,rankingForDiscipline,fail}=D;
+const {all,get,run,transaction,atomicWrite,ARCHIVE_DIR,Events,People,Shooters,Disciplines,fail}=D;
 const legacyValidate=require('./archive-validation').validateSeasonArchive;
 function fullExport(eventId=Events.active().id) {
   const event=Events.get(eventId);
-  return {format:'schuetzen-event',version:2,event_title:event.title,event,exported_at:new Date().toISOString(),
+  const placementHistory=all(`SELECT f.revision,p.shooter_id,f.discipline_id,f.rank,f.best_points,f.rounds
+    FROM placements f JOIN participants p ON p.id=f.participant_id WHERE f.event_id=? ORDER BY f.revision,f.discipline_id,f.rank`,[eventId])
+    .map(({rounds,...row})=>({...row,all_rounds:JSON.parse(rounds)}));
+  return {format:'schuetzen-event',version:3,event_title:event.title,event,exported_at:new Date().toISOString(),
     shooters:Shooters.list(eventId).map(({id,uuid,name,gender,start_number,created_at})=>({id,uuid,name,gender,start_number,created_at})),
     disciplines:Disciplines.list(eventId),
     results:all('SELECT r.id,p.shooter_id,r.discipline_id,r.round_number,r.points,r.created_at FROM results r JOIN participants p ON p.id=r.participant_id WHERE r.event_id=?',[eventId]),
-    placements:event.status==='closed' ? Disciplines.list(eventId).flatMap(d=>rankingForDiscipline(d.id).map(r=>({shooter_id:r.shooter_id,discipline_id:d.id,rank:r.rank,best_points:r.best_points,all_rounds:r.all_rounds}))) : []};
+    placements:event.status==='closed' ? placementHistory.filter(p=>p.revision===event.revision).map(({revision,...p})=>p) : [],
+    placement_history:placementHistory,
+    closures:all('SELECT revision,reason,created_at FROM closures WHERE event_id=? ORDER BY revision',[eventId])};
 }
 function validateSeasonArchive(data) {
   let clean;
   try { clean=legacyValidate(data); }
   catch(error) { if(!Number.isInteger(error.status)) error.status=400; throw error; }
-  if(data.version!==undefined && (data.version!==2 || data.format!=='schuetzen-event')) fail('Unbekannte Archivversion');
-  if(data.version===2) {
+  if(data.version!==undefined && (![2,3].includes(data.version) || data.format!=='schuetzen-event')) fail('Unbekannte Archivversion');
+  clean.archive_version=data.version || 1;
+  if([2,3].includes(data.version)) {
     const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if(!data.event || !uuid.test(data.event.uuid) || !['active','closed','correction'].includes(data.event.status) || data.event.ranking_version!=='series-name-v1') fail('Ungültige Event-Metadaten oder unbekannte Wertung');
     if(data.event.year!==null && (!Number.isInteger(data.event.year) || data.event.year<1900 || data.event.year>2200)) fail('Eventjahr ist ungültig');
-    if(!Number.isSafeInteger(data.event.revision) || data.event.revision<0 || (data.event.status==='closed' && data.event.revision<1)) fail('Eventrevision ist ungültig');
+    if(!Number.isSafeInteger(data.event.revision) || data.event.revision<0 || (['closed','correction'].includes(data.event.status) && data.event.revision<1)) fail('Eventrevision ist ungültig');
     if(![0,1].includes(data.event.reconstructed)) fail('Rekonstruktionskennzeichen ist ungültig');
     const uuids=new Set();
     clean.shooters.forEach((s,i)=>{const value=data.shooters[i].uuid;if(!uuid.test(value)||uuids.has(value)) fail('Ungültige oder doppelte Personen-UUID');s.uuid=value;uuids.add(value);});
@@ -68,6 +74,37 @@ function validateSeasonArchive(data) {
     } else if(clean.placements.length) {
       fail('Ein noch nicht abgeschlossenes Event darf keine Abschlusswertung enthalten');
     }
+    if(data.version===3) {
+      if(!Array.isArray(data.placement_history)||!Array.isArray(data.closures)) fail('Versionshistorie fehlt');
+      clean.placement_history=data.placement_history.map(p=>{
+        if(!Number.isSafeInteger(p.revision)||p.revision<1||p.revision>clean.event.revision||!clean.shooters.some(s=>s.id===p.shooter_id)||!clean.disciplines.some(d=>d.id===p.discipline_id)||!Number.isSafeInteger(p.rank)||p.rank<1||!Number.isFinite(p.best_points)||!Array.isArray(p.all_rounds)||!p.all_rounds.length||p.all_rounds.some(v=>typeof v!=='number'||!Number.isFinite(v))) fail('Historische Abschlussplatzierung ist ungültig');
+        return {revision:p.revision,shooter_id:p.shooter_id,discipline_id:p.discipline_id,rank:p.rank,best_points:p.best_points,all_rounds:p.all_rounds};
+      });
+      clean.closures=data.closures.map(c=>{
+        if(!Number.isSafeInteger(c.revision)||c.revision<1||c.revision>clean.event.revision||typeof c.reason!=='string'||!c.reason.trim()||c.reason.length>500||typeof c.created_at!=='string'||!Number.isFinite(Date.parse(c.created_at))) fail('Abschlussprotokoll ist ungültig');
+        return {revision:c.revision,reason:c.reason.trim(),created_at:c.created_at};
+      });
+      const expectedRevisions=Array.from({length:clean.event.revision},(_,i)=>i+1);
+      if(clean.event.status==='active' && (clean.event.revision!==0||clean.closures.length||clean.placement_history.length)) fail('Aktives Event enthält eine Abschlussversion');
+      if(clean.event.status!=='active' && JSON.stringify(clean.closures.map(c=>c.revision).sort((a,b)=>a-b))!==JSON.stringify(expectedRevisions)) fail('Abschlussprotokoll ist unvollständig');
+      const historyKeys=new Set(),groups=new Set(clean.results.map(r=>r.shooter_id+':'+r.discipline_id));
+      for(const p of clean.placement_history) {
+        const key=p.revision+':'+p.shooter_id+':'+p.discipline_id,rankKey=p.revision+':'+p.discipline_id+':rank:'+p.rank;
+        if(historyKeys.has(key)||historyKeys.has(rankKey)) fail('Doppelte historische Abschlussplatzierung');historyKeys.add(key);historyKeys.add(rankKey);
+      }
+      for(const revision of expectedRevisions) {
+        const rows=clean.placement_history.filter(p=>p.revision===revision),rowGroups=new Set(rows.map(p=>p.shooter_id+':'+p.discipline_id));
+        if(rowGroups.size!==groups.size||[...groups].some(key=>!rowGroups.has(key))) fail('Historische Abschlusswertung ist unvollständig');
+        for(const d of clean.disciplines) {
+          const ranks=rows.filter(p=>p.discipline_id===d.id).map(p=>p.rank).sort((a,b)=>a-b);
+          if(ranks.some((rank,index)=>rank!==index+1)) fail('Historische Abschlussränge sind unvollständig');
+        }
+      }
+      if(clean.event.status==='closed') {
+        const canonical=rows=>rows.map(p=>({shooter_id:p.shooter_id,discipline_id:p.discipline_id,rank:p.rank,best_points:p.best_points,all_rounds:p.all_rounds})).sort((a,b)=>a.discipline_id-b.discipline_id||a.rank-b.rank);
+        if(JSON.stringify(canonical(clean.placements))!==JSON.stringify(canonical(clean.placement_history.filter(p=>p.revision===clean.event.revision)))) fail('Letzte Abschlusswertung widerspricht der Versionshistorie');
+      }
+    }
   }
   return clean;
 }
@@ -105,7 +142,8 @@ function restoreSeasonArchive(data,{year,mapping={},fingerprint:expected}={}) {
   }
   const backup=require('./backups').create('vor-eventimport');
   const eventId=transaction(()=>{
-    const id=Number(run("INSERT INTO events(uuid,title,year,status,reconstructed) VALUES (?,?,?,'correction',?)",[a.event?.uuid||randomUUID(),a.event_title,y,a.event?.status==='closed' ? a.event.reconstructed : 1]).lastInsertRowid);
+    const preserveHistory=a.archive_version===3 && ['closed','correction'].includes(a.event?.status);
+    const id=Number(run("INSERT INTO events(uuid,title,year,status,reconstructed) VALUES (?,?,?,'correction',?)",[a.event?.uuid||randomUUID(),a.event_title,y,preserveHistory&&a.event.status==='closed' ? a.event.reconstructed : 1]).lastInsertRowid);
     const participants=new Map(),disciplines=new Map();
     for(const s of a.shooters) {
       let personId=mapping[s.id];
@@ -115,11 +153,16 @@ function restoreSeasonArchive(data,{year,mapping={},fingerprint:expected}={}) {
     }
     for(const d of a.disciplines) disciplines.set(d.id,Number(run('INSERT INTO disciplines(event_id,name,sort_order,created_at) VALUES (?,?,?,?)',[id,d.name,d.sort_order,d.created_at]).lastInsertRowid));
     for(const r of a.results) run('INSERT INTO results(event_id,participant_id,discipline_id,round_number,points,created_at) VALUES (?,?,?,?,?,?)',[id,participants.get(r.shooter_id),disciplines.get(r.discipline_id),r.round_number,r.points,r.created_at]);
-    if(a.event?.status==='closed') {
-      const revision=a.event.revision;
-      for(const row of a.placements) run('INSERT INTO placements(event_id,revision,participant_id,discipline_id,rank,best_points,rounds) VALUES (?,?,?,?,?,?,?)',[id,revision,participants.get(row.shooter_id),disciplines.get(row.discipline_id),row.rank,row.best_points,JSON.stringify(row.all_rounds)]);
-      run("INSERT INTO closures(event_id,revision,reason) VALUES (?,?, 'Importierte Abschlusswertung')",[id,revision]);
-      run("UPDATE events SET revision=?,status='closed',closed_at=datetime('now') WHERE id=?",[revision,id]);
+    if(preserveHistory) {
+      for(const row of a.placement_history) run('INSERT INTO placements(event_id,revision,participant_id,discipline_id,rank,best_points,rounds) VALUES (?,?,?,?,?,?,?)',[id,row.revision,participants.get(row.shooter_id),disciplines.get(row.discipline_id),row.rank,row.best_points,JSON.stringify(row.all_rounds)]);
+      for(const closure of a.closures) run('INSERT INTO closures(event_id,revision,reason,created_at) VALUES (?,?,?,?)',[id,closure.revision,closure.reason,closure.created_at]);
+      run('UPDATE events SET revision=? WHERE id=?',[a.event.revision,id]);
+      if(a.event.status==='closed') run("UPDATE events SET status='closed',closed_at=datetime('now') WHERE id=?",[id]);
+      else Events.close(id,'Aus Archiv rekonstruierter Abschluss des Korrekturstands');
+    } else if(a.event?.status==='closed') {
+      for(const row of a.placements) run('INSERT INTO placements(event_id,revision,participant_id,discipline_id,rank,best_points,rounds) VALUES (?,1,?,?,?,?,?)',[id,participants.get(row.shooter_id),disciplines.get(row.discipline_id),row.rank,row.best_points,JSON.stringify(row.all_rounds)]);
+      run("INSERT INTO closures(event_id,revision,reason) VALUES (?,1,'Aus älterem Archiv rekonstruierte Abschlusswertung')",[id]);
+      run("UPDATE events SET revision=1,status='closed',reconstructed=1,closed_at=datetime('now') WHERE id=?",[id]);
     } else Events.close(id,'Aus Archiv rekonstruierte Wertung');
     run('INSERT INTO imports(fingerprint,event_id) VALUES (?,?)',[p.fingerprint,id]);
     return id;
