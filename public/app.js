@@ -68,6 +68,7 @@ document.querySelectorAll('.tab').forEach((btn) => {
     document.querySelectorAll('.tab').forEach((b) => b.classList.remove('active'));
     document.querySelectorAll('.panel').forEach((p) => p.classList.remove('active'));
     btn.classList.add('active');
+    document.querySelector('main').classList.toggle('results-main', btn.dataset.tab === 'results');
     document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
     if (btn.dataset.tab === 'dashboard') startDashboard();
     else stopDashboard();
@@ -274,6 +275,15 @@ function renderShooterRow(s) {
     el('td', { class: 'row-actions' }, [
       el('button', {
         class: 'link',
+        text: 'Ergebnisse',
+        onclick: () => {
+          resultView.shooterId = s.id;
+          document.getElementById('resultSearch').value = '';
+          activateTab('results');
+        },
+      }),
+      el('button', {
+        class: 'link',
         text: 'Bearbeiten',
         onclick: () => {
           editingShooterId = s.id;
@@ -456,55 +466,6 @@ function fillSelect(selectEl, items, valueKey, labelFn) {
     selectEl.appendChild(el('option', { value: item[valueKey], text: labelFn(item) }));
   }
 }
-
-async function refreshResultSelectors() {
-  if (!state.shooters.length) await loadShooters();
-  if (!state.disciplines.length) await loadDisciplines();
-  fillSelect(document.getElementById('resultShooterSelect'), state.shooters, 'id', (s) => `Nr. ${s.start_number} – ${s.name}`);
-  fillSelect(document.getElementById('resultDisciplineSelect'), state.disciplines, 'id', (d) => d.name);
-  await loadResultsList();
-}
-
-async function loadResultsList() {
-  const shooterId = document.getElementById('resultShooterSelect').value;
-  const disciplineId = document.getElementById('resultDisciplineSelect').value;
-  const body = document.getElementById('resultTableBody');
-  body.innerHTML = '';
-  if (!shooterId || !disciplineId) return;
-  const results = await api(`/api/results?shooter_id=${shooterId}&discipline_id=${disciplineId}`);
-  for (const r of results) {
-    body.appendChild(
-      el('tr', {}, [
-        el('td', { text: r.round_number }),
-        el('td', { text: r.points }),
-        el('td', {}, [
-          el('button', {
-            class: 'link danger-text',
-            text: 'Löschen',
-            onclick: async () => {
-              await api(`/api/results/${r.id}`, { method: 'DELETE' });
-              loadResultsList();
-            },
-          }),
-        ]),
-      ])
-    );
-  }
-}
-
-document.getElementById('resultShooterSelect').addEventListener('change', loadResultsList);
-document.getElementById('resultDisciplineSelect').addEventListener('change', loadResultsList);
-
-document.getElementById('resultForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const shooter_id = Number(document.getElementById('resultShooterSelect').value);
-  const discipline_id = Number(document.getElementById('resultDisciplineSelect').value);
-  const points = document.getElementById('resultPoints').value;
-  if (!shooter_id || !discipline_id || points === '') return;
-  await api('/api/results', { method: 'POST', body: JSON.stringify({ shooter_id, discipline_id, points }) });
-  document.getElementById('resultPoints').value = '';
-  loadResultsList();
-});
 
 // ---------------- Rankings ----------------
 

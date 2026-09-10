@@ -150,19 +150,25 @@
     <!-- ERGEBNISSE ERFASSEN -->
     <section id="tab-results" class="panel">
       <h2>Ergebnisse erfassen</h2>
-      <div class="inline-form">
-        <select id="resultShooterSelect"></select>
-        <select id="resultDisciplineSelect"></select>
+      <p>Schützen finden, alle Durchgänge nachsehen und direkt weiter erfassen.</p>
+      <div class="results-workspace">
+        <aside class="results-sidebar" aria-label="Schützen auswählen">
+          <label for="resultSearch">Schützen suchen</label>
+          <input id="resultSearch" type="search" placeholder="Name oder Startnummer …" autocomplete="off" aria-describedby="resultSearchHint">
+          <p id="resultSearchHint" class="hint">Enter wählt den ersten Treffer.</p>
+          <div id="resultShooters"></div>
+          <p id="resultSearchCount" class="hint" role="status"></p>
+        </aside>
+        <div class="results-overview">
+          <header class="results-heading"><h3 id="resultShooterName" tabindex="-1">Schützen auswählen</h3><span id="resultProgress" class="hint"></span></header>
+          <label class="results-filter"><input id="resultShotOnly" type="checkbox"> Nur mit Ergebnissen</label>
+          <p id="resultLoadStatus" role="status"></p>
+          <div id="resultDisciplines"></div>
+        </div>
       </div>
-      <form id="resultForm" class="inline-form">
-        <input type="number" step="0.1" id="resultPoints" placeholder="Punkte" required>
-        <button type="submit">Durchgang hinzufügen</button>
-      </form>
-      <table class="data-table">
-        <thead><tr><th>Durchgang</th><th>Punkte</th><th></th></tr></thead>
-        <tbody id="resultTableBody"></tbody>
-      </table>
+      <p id="resultFeedback" role="status" aria-live="polite"></p>
       <p class="hint">Hinweis: Für die Rangliste zählt automatisch der beste Durchgang; bei Gleichstand entscheidet der nächstbeste.</p>
+      <p class="hint">„Noch kein Ergebnis“ bedeutet: kein Durchgang erfasst. Daraus lässt sich keine Anmeldung oder Schießpflicht ableiten.</p>
     </section>
 
     <!-- RANGLISTEN -->
@@ -269,6 +275,7 @@
 
   <dialog id="detailDialog"><button type="button" id="closeDetail">Schließen</button><div id="detailContent"></div></dialog>
   <script src="/app.js"></script>
+  <script src="/results.js"></script>
   <script src="/manage.js"></script>
 </body>
 </html>

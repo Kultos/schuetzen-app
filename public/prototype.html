@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Prototyp · Schützenübersicht</title>
+  <link rel="stylesheet" href="prototype.css">
+  <script src="prototype.js" defer></script>
+</head>
+<body>
+  <header class="topbar"><span class="brand">◎ &nbsp; Schützen-Wettkampf</span><span>Ergebnisse &amp; Eingabe</span><span class="demo-badge">UX-Prototyp</span></header>
+  <main>
+    <div class="page-heading"><div><p class="eyebrow">Vereinsschießen · Demo-Event 2026</p><h1>Ein Schütze. Alle Ergebnisse.</h1><p>Schützen finden, Durchgänge nachsehen und direkt weiter erfassen.</p></div><button id="reset" class="quiet">Demo zurücksetzen</button></div>
+    <p class="demo-note">Interaktive Demo mit erfundenen Beispieldaten. Eingaben gelten nur bis zum Neuladen dieser Seite.</p>
+    <div class="workspace">
+      <aside aria-label="Schützen auswählen">
+        <label for="search">Schützen suchen</label>
+        <input id="search" type="search" placeholder="Name oder Startnummer …" autocomplete="off" aria-describedby="searchHint">
+        <p id="searchHint" class="muted">Enter wählt den ersten Treffer.</p>
+        <div id="shooterList" class="shooter-list"></div>
+        <p id="searchCount" class="muted" role="status"></p>
+      </aside>
+      <section class="overview" aria-labelledby="shooterName">
+        <header class="shooter-heading"><div class="identity"><span id="startNumber" class="number"></span><div><p class="eyebrow">Ergebnisse im aktuellen Event</p><h2 id="shooterName"></h2></div></div><div id="progress" class="progress"></div></header>
+        <div class="overview-tools"><h3>Disziplinen &amp; Durchgänge</h3><label class="filter"><input id="shotOnly" type="checkbox"> Nur mit Ergebnissen</label></div>
+        <p class="muted">Alle Werte in Punkten. Der beste Durchgang ist hervorgehoben.</p>
+        <div id="disciplines" class="discipline-list"></div>
+        <p class="footnote">„Noch kein Ergebnis“ bedeutet: kein Durchgang erfasst. Daraus lässt sich keine Anmeldung oder Schießpflicht ableiten.</p>
+      </section>
+    </div>
+    <div id="feedback" role="status" aria-live="polite"></div>
+  </main>
+</body>
+</html>
