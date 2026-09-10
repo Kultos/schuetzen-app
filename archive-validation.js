@@ -63,9 +63,13 @@ function validateSeasonArchive(data) {
     if (disciplineNames.has(normalizedName)) throw new Error(`Disziplin "${name}" kommt mehrfach vor`);
     disciplineNames.add(normalizedName);
     if (!Number.isSafeInteger(item.sort_order)) throw new Error(`Disziplin ${index + 1}: Sortierung ist ungültig`);
+    if (data.version >= 4 && item.ranking_mode === undefined) throw new Error(`Disziplin ${index + 1}: Wertungsart fehlt`);
+    const ranking_mode = item.ranking_mode === undefined ? 'combined' : item.ranking_mode;
+    if (!['combined', 'separate'].includes(ranking_mode)) throw new Error(`Disziplin ${index + 1}: Wertungsart ist ungültig`);
     return {
       id,
       name,
+      ranking_mode,
       sort_order: item.sort_order,
       created_at: validateCreatedAt(item.created_at, `Disziplin ${index + 1}`),
     };

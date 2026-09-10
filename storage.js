@@ -44,7 +44,7 @@ function snapshot(label) {
   return name;
 }
 
-const CURRENT_SCHEMA_VERSION = 3;
+const CURRENT_SCHEMA_VERSION = 4;
 const SCHEMA = `
 CREATE TABLE shooters (
  id INTEGER PRIMARY KEY AUTOINCREMENT, uuid TEXT NOT NULL UNIQUE,
@@ -69,7 +69,7 @@ CREATE TABLE participants (
 );
 CREATE TABLE disciplines (
  id INTEGER PRIMARY KEY AUTOINCREMENT, event_id INTEGER NOT NULL REFERENCES events(id),
- name TEXT NOT NULL, sort_order INTEGER NOT NULL DEFAULT 0,
+ name TEXT NOT NULL, ranking_mode TEXT NOT NULL DEFAULT 'combined' CHECK(ranking_mode IN ('combined','separate')), sort_order INTEGER NOT NULL DEFAULT 0,
  created_at TEXT NOT NULL DEFAULT (datetime('now')), UNIQUE(event_id,name COLLATE NOCASE), UNIQUE(id,event_id)
 );
 CREATE TABLE results (
@@ -106,7 +106,7 @@ CREATE TABLE consent_log (
 CREATE TABLE imports (fingerprint TEXT PRIMARY KEY, event_id INTEGER NOT NULL REFERENCES events(id));
 CREATE TABLE person_aliases (uuid TEXT PRIMARY KEY, shooter_id INTEGER NOT NULL REFERENCES shooters(id));
 CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-PRAGMA user_version = 3;
+PRAGMA user_version = 4;
 `;
 
 const version = get('PRAGMA user_version').user_version;
@@ -154,8 +154,16 @@ if (version === 2) {
       INSERT INTO placements_v3 SELECT * FROM placements;
       DROP TABLE placements;
       ALTER TABLE placements_v3 RENAME TO placements;
-      PRAGMA user_version = 3;
+      ALTER TABLE disciplines ADD COLUMN ranking_mode TEXT NOT NULL DEFAULT 'combined' CHECK(ranking_mode IN ('combined','separate'));
+      PRAGMA user_version = 4;
     `);
+    checkDatabase(db);
+  });
+}
+if (version === 3) {
+  snapshot('vor-migration-v4');
+  transaction(() => {
+    db.exec("ALTER TABLE disciplines ADD COLUMN ranking_mode TEXT NOT NULL DEFAULT 'combined' CHECK(ranking_mode IN ('combined','separate')); PRAGMA user_version = 4;");
     checkDatabase(db);
   });
 }

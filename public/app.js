@@ -130,17 +130,25 @@ function renderDashboardRanking(discipline) {
     return;
   }
 
-  const list = el('ol', { class: 'ranking-list' });
-  for (const entry of discipline.ranking.slice(0, 8)) {
-    const medal = entry.rank <= 3 ? ` rank-${entry.rank}` : '';
-    list.appendChild(el('li', { class: `ranking-row${medal}` }, [
-      el('span', { class: 'rank-number', text: entry.rank }),
-      el('span', { class: 'rank-name', text: `Nr. ${entry.start_number} – ${entry.name}` }),
-      el('span', { class: 'rank-rounds', text: entry.all_rounds.slice(0, 3).map(formatPoints).join(' · ') }),
-      el('strong', { class: 'rank-score', text: formatPoints(entry.best_points) }),
-    ]));
+  const groups = discipline.ranking_mode === 'separate'
+    ? [['women', 'Frauen'], ['men', 'Männer']]
+    : [['combined', 'Gemeinsame Wertung']];
+  for (const [group, label] of groups) {
+    const entries = discipline.ranking.filter((entry) => entry.ranking_group === group).slice(0, 8);
+    if (!entries.length) continue;
+    if (discipline.ranking_mode === 'separate') container.appendChild(el('h4', { text: label }));
+    const list = el('ol', { class: 'ranking-list' });
+    for (const entry of entries) {
+      const medal = entry.rank <= 3 ? ` rank-${entry.rank}` : '';
+      list.appendChild(el('li', { class: `ranking-row${medal}` }, [
+        el('span', { class: 'rank-number', text: entry.rank }),
+        el('span', { class: 'rank-name', text: `Nr. ${entry.start_number} – ${entry.name}` }),
+        el('span', { class: 'rank-rounds', text: entry.all_rounds.slice(0, 3).map(formatPoints).join(' · ') }),
+        el('strong', { class: 'rank-score', text: formatPoints(entry.best_points) }),
+      ]));
+    }
+    container.appendChild(list);
   }
-  container.appendChild(list);
 }
 
 function renderLatestResults(results) {
@@ -378,6 +386,7 @@ async function loadDisciplines() {
 function renderDisciplineRow(d) {
   return el('tr', {}, [
     el('td', { text: d.name }),
+    el('td', { text: d.ranking_mode === 'separate' ? 'Getrennt' : 'Gemeinsam' }),
     el('td', { class: 'row-actions' }, [
       el('button', {
         class: 'link',
@@ -403,11 +412,13 @@ function renderDisciplineRow(d) {
 function renderDisciplineEditRow(d) {
   const nameInput = el('input', { type: 'text' });
   nameInput.value = d.name;
+  const modeInput = el('select', {}, [el('option', { value: 'combined', text: 'Gemeinsame Wertung' }), el('option', { value: 'separate', text: 'Getrennt: Frauen / Männer' })]);
+  modeInput.value = d.ranking_mode;
 
   const save = async () => {
     const name = nameInput.value.trim();
     if (!name) { alert('Name darf nicht leer sein.'); return; }
-    await api(`/api/disciplines/${d.id}`, { method: 'PUT', body: JSON.stringify({ name }) });
+    await api(`/api/disciplines/${d.id}`, { method: 'PUT', body: JSON.stringify({ name, ranking_mode: modeInput.value }) });
     editingDisciplineId = null;
     loadDisciplines();
   };
@@ -419,6 +430,7 @@ function renderDisciplineEditRow(d) {
 
   return el('tr', {}, [
     el('td', {}, [nameInput]),
+    el('td', {}, [modeInput]),
     el('td', { class: 'row-actions' }, [
       el('button', { text: 'Speichern', onclick: save }),
       el('button', { class: 'link', text: 'Abbrechen', onclick: cancel }),
@@ -429,8 +441,9 @@ function renderDisciplineEditRow(d) {
 document.getElementById('disciplineForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const name = document.getElementById('disciplineName').value.trim();
+  const ranking_mode = document.getElementById('disciplineRankingMode').value;
   if (!name) return;
-  await api('/api/disciplines', { method: 'POST', body: JSON.stringify({ name }) });
+  await api('/api/disciplines', { method: 'POST', body: JSON.stringify({ name, ranking_mode }) });
   document.getElementById('disciplineName').value = '';
   loadDisciplines();
 });
@@ -503,15 +516,20 @@ async function refreshRankingSelector() {
 
 async function loadRanking() {
   const disciplineId = document.getElementById('rankingDisciplineSelect').value;
-  const body = document.getElementById('rankingTableBody');
-  body.innerHTML = '';
+  const tables = document.getElementById('rankingTables');
+  tables.innerHTML = '';
   if (!disciplineId) return;
   const discipline = state.disciplines.find((d) => String(d.id) === String(disciplineId));
   document.getElementById('printTitle').textContent = 'Rangliste – ' + (discipline ? discipline.name : '');
   document.getElementById('printDate').textContent = 'Stand: ' + new Date().toLocaleDateString('de-DE');
   const ranking = await api(`/api/rankings/${disciplineId}`);
-  for (const r of ranking) {
-    body.appendChild(
+  const groups = discipline.ranking_mode === 'separate' ? [['women','Frauen'],['men','Männer']] : [['combined','Gemeinsame Wertung']];
+  for (const [group, label] of groups) {
+    const rows = ranking.filter((r) => r.ranking_group === group);
+    if (!rows.length) continue;
+    if (discipline.ranking_mode === 'separate') tables.appendChild(el('h3', { text: label }));
+    const body = el('tbody');
+    for (const r of rows) body.appendChild(
       el('tr', {}, [
         el('td', { text: r.rank }),
         el('td', { text: r.start_number }),
@@ -521,6 +539,8 @@ async function loadRanking() {
         el('td', { text: r.all_rounds.join(', ') }),
       ])
     );
+    const table = el('table', { class: 'data-table ranking-table' }, [el('thead', {}, [el('tr', {}, ['Platz','Startnummer','Name','Geschlecht','Bestes Ergebnis','Alle Durchgänge'].map((text) => el('th', { text })))]), body]);
+    tables.appendChild(table);
   }
 }
 

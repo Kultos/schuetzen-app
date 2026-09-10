@@ -164,16 +164,19 @@ const Disciplines = {
   list(eventId=current()) { return all('SELECT * FROM disciplines WHERE event_id=? ORDER BY sort_order,name COLLATE NOCASE',[eventId]); },
   findById(id) { return get('SELECT * FROM disciplines WHERE id=? AND event_id=?',[id,current()]); },
   findByName(name) { return get('SELECT * FROM disciplines WHERE name=? COLLATE NOCASE AND event_id=?',[name,current()]); },
-  create({name}) {
+  create({name,ranking_mode='combined'}) {
     if(typeof name!=='string' || !name.trim() || name.length>200) fail('Disziplinname ist ungültig');
+    if(!['combined','separate'].includes(ranking_mode)) fail('Wertungsart ist ungültig');
     const order=get('SELECT COALESCE(MAX(sort_order),0)+1 AS n FROM disciplines WHERE event_id=?',[current()]).n;
-    const id=Number(run('INSERT INTO disciplines(event_id,name,sort_order) VALUES (?,?,?)',[current(),name.trim(),order]).lastInsertRowid);
+    const id=Number(run('INSERT INTO disciplines(event_id,name,ranking_mode,sort_order) VALUES (?,?,?,?)',[current(),name.trim(),ranking_mode,order]).lastInsertRowid);
     return this.findById(id);
   },
-  update(id,{name}) {
-    if(!this.findById(id)) fail('Disziplin nicht gefunden',404);
+  update(id,{name,ranking_mode}) {
+    const existing=this.findById(id); if(!existing) fail('Disziplin nicht gefunden',404);
     if(typeof name!=='string' || !name.trim() || name.length>200) fail('Disziplinname ist ungültig');
-    run('UPDATE disciplines SET name=? WHERE id=?',[name.trim(),id]); return this.findById(id);
+    ranking_mode=ranking_mode===undefined ? existing.ranking_mode : ranking_mode;
+    if(!['combined','separate'].includes(ranking_mode)) fail('Wertungsart ist ungültig');
+    run('UPDATE disciplines SET name=?,ranking_mode=? WHERE id=?',[name.trim(),ranking_mode,id]); return this.findById(id);
   },
   remove(id) { if(!this.findById(id)) fail('Disziplin nicht gefunden',404); run('DELETE FROM disciplines WHERE id=?',[id]); }
 };
@@ -207,7 +210,7 @@ function rankingForDiscipline(id, calculate=false) {
   const e=Events.get(d.event_id);
   if(e.status==='closed' && !calculate) return all(`SELECT f.rank,p.shooter_id,p.id AS participant_id,p.name,p.gender,p.start_number,
     f.best_points,f.rounds FROM placements f JOIN participants p ON p.id=f.participant_id
-    WHERE f.discipline_id=? AND f.revision=? ORDER BY f.rank`,[id,e.revision]).map(({rounds,...r})=>({...r,all_rounds:JSON.parse(rounds)}));
+    WHERE f.discipline_id=? AND f.revision=? ORDER BY ${d.ranking_mode==='separate' ? "p.gender DESC," : ''} f.rank`,[id,e.revision]).map(({rounds,...r})=>({...r,ranking_group:d.ranking_mode==='separate' ? (r.gender==='w'?'women':'men') : 'combined',all_rounds:JSON.parse(rounds)}));
   const by=new Map();
   for(const r of all(`SELECT p.*,r.points FROM participants p JOIN results r ON r.participant_id=p.id WHERE r.discipline_id=?`,[id])) {
     if(!by.has(r.id)) by.set(r.id,{shooter_id:r.shooter_id,participant_id:r.id,name:r.name,gender:r.gender,start_number:r.start_number,all_rounds:[]});
@@ -216,6 +219,7 @@ function rankingForDiscipline(id, calculate=false) {
   const entries=[...by.values()];
   entries.forEach(r=>r.all_rounds.sort((a,b)=>b-a));
   entries.sort((a,b)=>{
+    if(d.ranking_mode==='separate' && a.gender!==b.gender) return a.gender==='w' ? -1 : 1;
     for(let i=0;i<Math.max(a.all_rounds.length,b.all_rounds.length);i++) {
       if(a.all_rounds[i]===undefined) return 1;
       if(b.all_rounds[i]===undefined) return -1;
@@ -223,7 +227,12 @@ function rankingForDiscipline(id, calculate=false) {
     }
     return a.name.localeCompare(b.name,'de') || a.participant_id-b.participant_id;
   });
-  return entries.map((r,i)=>({...r,rank:i+1,best_points:r.all_rounds[0]}));
+  const ranks={};
+  return entries.map((r,i)=>{
+    const ranking_group=d.ranking_mode==='separate' ? (r.gender==='w'?'women':'men') : 'combined';
+    ranks[ranking_group]=(ranks[ranking_group]||0)+1;
+    return {...r,ranking_group,rank:ranks[ranking_group],best_points:r.all_rounds[0]};
+  });
 }
 function dashboardSnapshot() {
   const disciplines=Disciplines.list().map(d=>({...d,ranking:rankingForDiscipline(d.id)}));

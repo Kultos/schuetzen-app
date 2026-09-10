@@ -49,7 +49,7 @@ Beim manuellen Start bleibt das Serverfenster während des Betriebs geöffnet. I
 
 „Bisheriges Event abschließen und neues starten“ erstellt ein Vorabbackup, speichert Abschlussplätze und öffnet ein leeres Event. Der Stamm bleibt erhalten. Disziplinen werden für das neue Event neu angelegt. Wiederholte Anfragen mit dem alten Event werden abgewiesen; Helfer mit einer veralteten Ansicht müssen neu laden.
 
-Wertung: beste Serie, danach alle Folgeserien; bei vollständig gleichen Serien entscheidet der Name alphabetisch (`series-name-v1`). Abgeschlossene Plätze werden gespeichert. Unter „Events und Abschlusswertungen“ können vorhandene Punktwerte mit Begründung korrigiert werden. Ein erneuter Abschluss erzeugt eine neue Wertungsversion; vorherige Wertungen bleiben in der Datenbank erhalten.
+Wertung: beste Serie, danach alle Folgeserien; bei vollständig gleichen Serien entscheidet der Name alphabetisch (`series-name-v1`). Für jede Disziplin lässt sich beim Anlegen oder Bearbeiten eine gemeinsame Wertung oder eine getrennte Frauen-/Männerwertung wählen; bei getrennter Wertung beginnen beide Ranglisten bei Platz 1. Abgeschlossene Plätze werden gespeichert. Unter „Events und Abschlusswertungen“ können vorhandene Punktwerte mit Begründung korrigiert werden. Ein erneuter Abschluss erzeugt eine neue Wertungsversion; vorherige Wertungen bleiben in der Datenbank erhalten.
 
 Das Live-Dashboard unter `/dashboard` bleibt ohne Anmeldung erreichbar. Es zeigt ausschließlich das aktive Event und niemals E-Mail-Adressen oder Einwilligungen. Ranglisten lassen sich weiterhin im Browser drucken beziehungsweise als PDF speichern.
 
@@ -81,7 +81,7 @@ Danach `https://SERVERNAME:3000` verwenden. Zertifikat und Name müssen überein
 
 ## Eventexport und Import
 
-Ein Eventexport ist JSON, Version 3, mit stabilen Personen-/Event-UUIDs, damaligen Namen, Nummern, Ergebnissen sowie allen gespeicherten Abschlussversionen und Korrekturbegründungen. Keine Kontakte oder Einwilligungen; dennoch personenbezogene Daten.
+Ein Eventexport ist JSON, Version 4, mit stabilen Personen-/Event-UUIDs, damaligen Namen, Nummern, Ergebnissen, Wertungsart je Disziplin sowie allen gespeicherten Abschlussversionen und Korrekturbegründungen. Keine Kontakte oder Einwilligungen; dennoch personenbezogene Daten.
 
 Unter „Import“ die Datei auswählen. Die Vorschau verlangt Jahr und für jede Person Zuordnung oder Neuanlage. Übereinstimmende UUIDs werden vorgegeben; Namen allein führen niemals automatisch zusammen. Bestätigte Zuordnungen abweichender UUIDs werden für weitere Importe gespeichert. Das Event ergänzt die Historie, aktives Event und Kontakte bleiben erhalten. Vorhandene Events und wiederholte gleiche Imports werden abgewiesen.
 

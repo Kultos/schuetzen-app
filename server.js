@@ -284,7 +284,9 @@ async function handleApi(req, res, pathname, query) {
     const name = normalizedName(body.name);
     if (!name) return sendError(res, 400, 'name erforderlich');
     if (Disciplines.findByName(name)) return sendError(res, 409, 'Disziplin existiert bereits');
-    return sendJSON(res, 201, Disciplines.create({ name }));
+    const ranking_mode = body.ranking_mode === undefined ? 'combined' : body.ranking_mode;
+    if (!['combined','separate'].includes(ranking_mode)) return sendError(res, 400, 'ranking_mode ist ungültig');
+    return sendJSON(res, 201, Disciplines.create({ name, ranking_mode }));
   }
   if ((m = pathname.match(/^\/api\/disciplines\/(\d+)$/))) {
     const id = Number(m[1]);
@@ -296,7 +298,9 @@ async function handleApi(req, res, pathname, query) {
       if (!current) return sendError(res, 404, 'Disziplin nicht gefunden');
       const duplicate = Disciplines.findByName(name);
       if (duplicate && duplicate.id !== id) return sendError(res, 409, 'Disziplin existiert bereits');
-      return sendJSON(res, 200, Disciplines.update(id, { name }));
+      const ranking_mode = body.ranking_mode === undefined ? current.ranking_mode : body.ranking_mode;
+      if (!['combined','separate'].includes(ranking_mode)) return sendError(res, 400, 'ranking_mode ist ungültig');
+      return sendJSON(res, 200, Disciplines.update(id, { name, ranking_mode }));
     }
     if (method === 'DELETE') {
       if (!Disciplines.findById(id)) return sendError(res, 404, 'Disziplin nicht gefunden');

@@ -229,6 +229,57 @@ test('Rangliste berücksichtigt alle Folgeserien, Anzahl der Serien und Namen', 
   assert.deepEqual(ranking[0].all_rounds, [100, 95]);
 });
 
+test('Getrennte Wertung vergibt Frauen und Männern je Disziplin eigene Plätze', () => {
+  const discipline = Disciplines.create({ name: 'Luftpistole', ranking_mode: 'separate' });
+  const anna = Shooters.create({ name: 'Anna', gender: 'w' });
+  const bert = Shooters.create({ name: 'Bert', gender: 'm' });
+  const clara = Shooters.create({ name: 'Clara', gender: 'w' });
+  const dirk = Shooters.create({ name: 'Dirk', gender: 'm' });
+  for (const [shooter, points] of [[anna, 90], [bert, 99], [clara, 80], [dirk, 70]]) {
+    Results.create({ shooter_id: shooter.id, discipline_id: discipline.id, round_number: 1, points });
+  }
+
+  const ranking = rankingForDiscipline(discipline.id);
+  assert.deepEqual(ranking.map(({ name, ranking_group, rank }) => ({ name, ranking_group, rank })), [
+    { name: 'Anna', ranking_group: 'women', rank: 1 },
+    { name: 'Clara', ranking_group: 'women', rank: 2 },
+    { name: 'Bert', ranking_group: 'men', rank: 1 },
+    { name: 'Dirk', ranking_group: 'men', rank: 2 },
+  ]);
+
+  const previous = Events.active().id;
+  Events.start({ title: 'Nächstes Event', year: 2027, previous_event_id: previous });
+  assert.deepEqual(rankingForDiscipline(discipline.id).map(({ ranking_group, rank }) => ({ ranking_group, rank })), [
+    { ranking_group: 'women', rank: 1 }, { ranking_group: 'women', rank: 2 },
+    { ranking_group: 'men', rank: 1 }, { ranking_group: 'men', rank: 2 },
+  ]);
+  const archive = fullExport(previous);
+  assert.equal(archive.disciplines[0].ranking_mode, 'separate');
+  assert.doesNotThrow(() => validateSeasonArchive(archive));
+});
+
+test('Disziplin-API speichert und validiert die Wertungsart', async () => {
+  let result = await api('/api/disciplines', {
+    method: 'POST',
+    json: { name: 'Sportpistole', ranking_mode: 'separate' },
+  });
+  assert.equal(result.response.status, 201);
+  assert.equal(result.body.ranking_mode, 'separate');
+
+  result = await api(`/api/disciplines/${result.body.id}`, {
+    method: 'PUT',
+    json: { name: 'Sportpistole neu' },
+  });
+  assert.equal(result.response.status, 200);
+  assert.equal(result.body.ranking_mode, 'separate');
+
+  result = await api('/api/disciplines', {
+    method: 'POST',
+    json: { name: 'Ungültig', ranking_mode: 'mixed' },
+  });
+  assert.equal(result.response.status, 400);
+});
+
 test('API validiert Eingaben und meldet fehlende oder doppelte Datensätze eindeutig', async () => {
   let result = await api('/api/shooters', {
     method: 'POST',
@@ -559,7 +610,7 @@ test('Abschlusskorrektur erfordert Begründung und erzeugt eine neue Wertungsver
   assert.equal(db.prepare('SELECT best_points FROM placements WHERE event_id=? AND revision=1').get(previous).best_points,80);
 
   const archive=fullExport(previous);
-  assert.equal(archive.version,3);
+  assert.equal(archive.version,4);
   assert.deepEqual([...new Set(archive.placement_history.map(p=>p.revision))],[1,2]);
   assert.deepEqual(archive.closures.map(c=>c.revision),[1,2]);
   archive.event.uuid='99999999-9999-4999-8999-999999999999';

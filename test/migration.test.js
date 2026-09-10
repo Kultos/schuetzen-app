@@ -60,7 +60,7 @@ test('Fehlgeschlagene Migration lässt das alte Schema und alle Datensätze inta
   } finally {fs.rmSync(dir,{recursive:true,force:true});}
 });
 
-test('Schema 2 wird mit Platzierungsbeziehungen und UUID-Aliasen auf Schema 3 aktualisiert',()=>{
+test('Schema 2 wird mit Platzierungsbeziehungen, UUID-Aliasen und gemeinsamer Wertung auf Schema 4 aktualisiert',()=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'schuetzen-v2-'));
   const file=path.join(dir,'wettkampf.db'),seed=new DatabaseSync(file);
   seed.exec(`
@@ -86,7 +86,22 @@ test('Schema 2 wird mit Platzierungsbeziehungen und UUID-Aliasen auf Schema 3 ak
     const code="const S=require('./storage'); console.log(JSON.stringify({version:S.get('PRAGMA user_version').user_version,aliases:S.get(\"SELECT COUNT(*) AS n FROM sqlite_master WHERE name='person_aliases'\").n,fks:S.all('PRAGMA foreign_key_list(placements)').length}));S.db.close();";
     const result=spawnSync(process.execPath,['-e',code],{cwd:path.join(__dirname,'..'),env:{...process.env,SCHUETZEN_DATA_DIR:dir},encoding:'utf8'});
     assert.equal(result.status,0,result.stderr);
-    assert.deepEqual(JSON.parse(result.stdout),{version:3,aliases:1,fks:5});
+    assert.deepEqual(JSON.parse(result.stdout),{version:4,aliases:1,fks:5});
+    assert.equal(fs.readdirSync(path.join(dir,'backups')).filter(n=>n.endsWith('.sqlite')).length,1);
+  } finally {fs.rmSync(dir,{recursive:true,force:true});}
+});
+
+test('Schema 3 erhält beim Update die gemeinsame Wertung als sicheren Standard',()=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'schuetzen-v3-'));
+  const file=path.join(dir,'wettkampf.db'),seed=new DatabaseSync(file);
+  seed.exec(`CREATE TABLE disciplines(id INTEGER PRIMARY KEY,event_id INTEGER,name TEXT,sort_order INTEGER,created_at TEXT);
+    INSERT INTO disciplines VALUES(1,1,'Gewehr',1,'2026'); PRAGMA user_version=3;`);
+  seed.close();
+  try {
+    const code="const S=require('./storage'); console.log(JSON.stringify({version:S.get('PRAGMA user_version').user_version,mode:S.get('SELECT ranking_mode FROM disciplines').ranking_mode}));S.db.close();";
+    const result=spawnSync(process.execPath,['-e',code],{cwd:path.join(__dirname,'..'),env:{...process.env,SCHUETZEN_DATA_DIR:dir},encoding:'utf8'});
+    assert.equal(result.status,0,result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout),{version:4,mode:'combined'});
     assert.equal(fs.readdirSync(path.join(dir,'backups')).filter(n=>n.endsWith('.sqlite')).length,1);
   } finally {fs.rmSync(dir,{recursive:true,force:true});}
 });

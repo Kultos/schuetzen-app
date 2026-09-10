@@ -10,7 +10,7 @@ function fullExport(eventId=Events.active().id) {
   const placementHistory=all(`SELECT f.revision,p.shooter_id,f.discipline_id,f.rank,f.best_points,f.rounds
     FROM placements f JOIN participants p ON p.id=f.participant_id WHERE f.event_id=? ORDER BY f.revision,f.discipline_id,f.rank`,[eventId])
     .map(({rounds,...row})=>({...row,all_rounds:JSON.parse(rounds)}));
-  return {format:'schuetzen-event',version:3,event_title:event.title,event,exported_at:new Date().toISOString(),
+  return {format:'schuetzen-event',version:4,event_title:event.title,event,exported_at:new Date().toISOString(),
     shooters:Shooters.list(eventId).map(({id,uuid,name,gender,start_number,created_at})=>({id,uuid,name,gender,start_number,created_at})),
     disciplines:Disciplines.list(eventId),
     results:all('SELECT r.id,p.shooter_id,r.discipline_id,r.round_number,r.points,r.created_at FROM results r JOIN participants p ON p.id=r.participant_id WHERE r.event_id=?',[eventId]),
@@ -22,9 +22,9 @@ function validateSeasonArchive(data) {
   let clean;
   try { clean=legacyValidate(data); }
   catch(error) { if(!Number.isInteger(error.status)) error.status=400; throw error; }
-  if(data.version!==undefined && (![2,3].includes(data.version) || data.format!=='schuetzen-event')) fail('Unbekannte Archivversion');
+  if(data.version!==undefined && (![2,3,4].includes(data.version) || data.format!=='schuetzen-event')) fail('Unbekannte Archivversion');
   clean.archive_version=data.version || 1;
-  if([2,3].includes(data.version)) {
+  if([2,3,4].includes(data.version)) {
     const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if(!data.event || !uuid.test(data.event.uuid) || !['active','closed','correction'].includes(data.event.status) || data.event.ranking_version!=='series-name-v1') fail('Ungültige Event-Metadaten oder unbekannte Wertung');
     if(data.event.year!==null && (!Number.isInteger(data.event.year) || data.event.year<1900 || data.event.year>2200)) fail('Eventjahr ist ungültig');
@@ -38,10 +38,12 @@ function validateSeasonArchive(data) {
       if(!clean.shooters.some(s=>s.id===p.shooter_id)||!clean.disciplines.some(d=>d.id===p.discipline_id)||!Number.isSafeInteger(p.rank)||p.rank<1||!Number.isFinite(p.best_points)||!Array.isArray(p.all_rounds)||!p.all_rounds.length||p.all_rounds.some(v=>typeof v!=='number'||!Number.isFinite(v))) fail('Abschlussplatzierung ist ungültig');
       return {shooter_id:p.shooter_id,discipline_id:p.discipline_id,rank:p.rank,best_points:p.best_points,all_rounds:p.all_rounds};
     });
+    const rankingGroup=p=>clean.disciplines.find(d=>d.id===p.discipline_id).ranking_mode==='separate'
+      ? clean.shooters.find(s=>s.id===p.shooter_id).gender : 'combined';
     const keys=new Set();
     const ranks=new Set();
     for(const p of clean.placements) {
-      const key=p.shooter_id+':'+p.discipline_id, rankKey=p.discipline_id+':'+p.rank;
+      const key=p.shooter_id+':'+p.discipline_id, rankKey=p.discipline_id+':'+rankingGroup(p)+':'+p.rank;
       if(keys.has(key)||ranks.has(rankKey)) fail('Doppelte Abschlussplatzierung');keys.add(key);ranks.add(rankKey);
     }
     if(clean.event.status==='closed') {
@@ -57,24 +59,28 @@ function validateSeasonArchive(data) {
         const expected=[...new Set(clean.results.filter(r=>r.discipline_id===d.id).map(r=>r.shooter_id))].map(shooterId=>({
           shooter_id:shooterId,
           name:names.get(shooterId),
+          gender:clean.shooters.find(s=>s.id===shooterId).gender,
           rounds:clean.results.filter(r=>r.discipline_id===d.id&&r.shooter_id===shooterId).map(r=>r.points).sort((a,b)=>b-a)
         }));
         expected.sort((a,b)=>{
+          if(d.ranking_mode==='separate' && a.gender!==b.gender) return a.gender==='w' ? -1 : 1;
           for(let i=0;i<Math.max(a.rounds.length,b.rounds.length);i++) {
             if(a.rounds[i]===undefined)return 1;if(b.rounds[i]===undefined)return -1;
             if(a.rounds[i]!==b.rounds[i])return b.rounds[i]-a.rounds[i];
           }
           return a.name.localeCompare(b.name,'de') || a.shooter_id-b.shooter_id;
         });
-        expected.forEach((row,index)=>{
+        const ranksByGroup={}; expected.forEach(row=>{
           const placement=clean.placements.find(p=>p.discipline_id===d.id&&p.shooter_id===row.shooter_id);
-          if(!placement || placement.rank!==index+1) fail('Abschlussrang entspricht nicht der angegebenen Wertungsregel');
+          const group=d.ranking_mode==='separate' ? row.gender : 'combined';
+          ranksByGroup[group]=(ranksByGroup[group]||0)+1;
+          if(!placement || placement.rank!==ranksByGroup[group]) fail('Abschlussrang entspricht nicht der angegebenen Wertungsregel');
         });
       }
     } else if(clean.placements.length) {
       fail('Ein noch nicht abgeschlossenes Event darf keine Abschlusswertung enthalten');
     }
-    if(data.version===3) {
+    if(data.version>=3) {
       if(!Array.isArray(data.placement_history)||!Array.isArray(data.closures)) fail('Versionshistorie fehlt');
       clean.placement_history=data.placement_history.map(p=>{
         if(!Number.isSafeInteger(p.revision)||p.revision<1||p.revision>clean.event.revision||!clean.shooters.some(s=>s.id===p.shooter_id)||!clean.disciplines.some(d=>d.id===p.discipline_id)||!Number.isSafeInteger(p.rank)||p.rank<1||!Number.isFinite(p.best_points)||!Array.isArray(p.all_rounds)||!p.all_rounds.length||p.all_rounds.some(v=>typeof v!=='number'||!Number.isFinite(v))) fail('Historische Abschlussplatzierung ist ungültig');
@@ -89,19 +95,21 @@ function validateSeasonArchive(data) {
       if(clean.event.status!=='active' && JSON.stringify(clean.closures.map(c=>c.revision).sort((a,b)=>a-b))!==JSON.stringify(expectedRevisions)) fail('Abschlussprotokoll ist unvollständig');
       const historyKeys=new Set(),groups=new Set(clean.results.map(r=>r.shooter_id+':'+r.discipline_id));
       for(const p of clean.placement_history) {
-        const key=p.revision+':'+p.shooter_id+':'+p.discipline_id,rankKey=p.revision+':'+p.discipline_id+':rank:'+p.rank;
+        const key=p.revision+':'+p.shooter_id+':'+p.discipline_id,rankKey=p.revision+':'+p.discipline_id+':'+rankingGroup(p)+':rank:'+p.rank;
         if(historyKeys.has(key)||historyKeys.has(rankKey)) fail('Doppelte historische Abschlussplatzierung');historyKeys.add(key);historyKeys.add(rankKey);
       }
       for(const revision of expectedRevisions) {
         const rows=clean.placement_history.filter(p=>p.revision===revision),rowGroups=new Set(rows.map(p=>p.shooter_id+':'+p.discipline_id));
         if(rowGroups.size!==groups.size||[...groups].some(key=>!rowGroups.has(key))) fail('Historische Abschlusswertung ist unvollständig');
         for(const d of clean.disciplines) {
-          const ranks=rows.filter(p=>p.discipline_id===d.id).map(p=>p.rank).sort((a,b)=>a-b);
-          if(ranks.some((rank,index)=>rank!==index+1)) fail('Historische Abschlussränge sind unvollständig');
+          for(const group of d.ranking_mode==='separate' ? ['m','w'] : ['combined']) {
+            const ranks=rows.filter(p=>p.discipline_id===d.id&&(group==='combined'||clean.shooters.find(s=>s.id===p.shooter_id).gender===group)).map(p=>p.rank).sort((a,b)=>a-b);
+            if(ranks.some((rank,index)=>rank!==index+1)) fail('Historische Abschlussränge sind unvollständig');
+          }
         }
       }
       if(clean.event.status==='closed') {
-        const canonical=rows=>rows.map(p=>({shooter_id:p.shooter_id,discipline_id:p.discipline_id,rank:p.rank,best_points:p.best_points,all_rounds:p.all_rounds})).sort((a,b)=>a.discipline_id-b.discipline_id||a.rank-b.rank);
+        const canonical=rows=>rows.map(p=>({shooter_id:p.shooter_id,discipline_id:p.discipline_id,rank:p.rank,best_points:p.best_points,all_rounds:p.all_rounds})).sort((a,b)=>a.discipline_id-b.discipline_id||rankingGroup(a).localeCompare(rankingGroup(b))||a.rank-b.rank||a.shooter_id-b.shooter_id);
         if(JSON.stringify(canonical(clean.placements))!==JSON.stringify(canonical(clean.placement_history.filter(p=>p.revision===clean.event.revision)))) fail('Letzte Abschlusswertung widerspricht der Versionshistorie');
       }
     }
@@ -142,7 +150,7 @@ function restoreSeasonArchive(data,{year,mapping={},fingerprint:expected}={}) {
   }
   const backup=require('./backups').create('vor-eventimport');
   const eventId=transaction(()=>{
-    const preserveHistory=a.archive_version===3 && ['closed','correction'].includes(a.event?.status);
+    const preserveHistory=a.archive_version>=3 && ['closed','correction'].includes(a.event?.status);
     const id=Number(run("INSERT INTO events(uuid,title,year,status,reconstructed) VALUES (?,?,?,'correction',?)",[a.event?.uuid||randomUUID(),a.event_title,y,preserveHistory&&a.event.status==='closed' ? a.event.reconstructed : 1]).lastInsertRowid);
     const participants=new Map(),disciplines=new Map();
     for(const s of a.shooters) {
@@ -151,7 +159,7 @@ function restoreSeasonArchive(data,{year,mapping={},fingerprint:expected}={}) {
       if(s.uuid && People.get(personId).uuid!==s.uuid) run('INSERT INTO person_aliases(uuid,shooter_id) VALUES (?,?) ON CONFLICT(uuid) DO NOTHING',[s.uuid,personId]);
       participants.set(s.id,Number(run('INSERT INTO participants(event_id,shooter_id,start_number,name,gender,created_at) VALUES (?,?,?,?,?,?)',[id,personId,s.start_number,s.name,s.gender,s.created_at]).lastInsertRowid));
     }
-    for(const d of a.disciplines) disciplines.set(d.id,Number(run('INSERT INTO disciplines(event_id,name,sort_order,created_at) VALUES (?,?,?,?)',[id,d.name,d.sort_order,d.created_at]).lastInsertRowid));
+    for(const d of a.disciplines) disciplines.set(d.id,Number(run('INSERT INTO disciplines(event_id,name,ranking_mode,sort_order,created_at) VALUES (?,?,?,?,?)',[id,d.name,d.ranking_mode,d.sort_order,d.created_at]).lastInsertRowid));
     for(const r of a.results) run('INSERT INTO results(event_id,participant_id,discipline_id,round_number,points,created_at) VALUES (?,?,?,?,?,?)',[id,participants.get(r.shooter_id),disciplines.get(r.discipline_id),r.round_number,r.points,r.created_at]);
     if(preserveHistory) {
       for(const row of a.placement_history) run('INSERT INTO placements(event_id,revision,participant_id,discipline_id,rank,best_points,rounds) VALUES (?,?,?,?,?,?,?)',[id,row.revision,participants.get(row.shooter_id),disciplines.get(row.discipline_id),row.rank,row.best_points,JSON.stringify(row.all_rounds)]);

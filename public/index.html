@@ -138,10 +138,11 @@
       <h2>Disziplinen</h2>
       <form id="disciplineForm" class="inline-form">
         <input type="text" id="disciplineName" placeholder="Name der Disziplin" required>
+        <select id="disciplineRankingMode" aria-label="Wertungsart"><option value="combined">Gemeinsame Wertung</option><option value="separate">Getrennt: Frauen / Männer</option></select>
         <button type="submit">Hinzufügen</button>
       </form>
       <table class="data-table">
-        <thead><tr><th>Name</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Wertung</th><th></th></tr></thead>
         <tbody id="disciplineTableBody"></tbody>
       </table>
     </section>
@@ -180,7 +181,8 @@
             <div id="printDate"></div>
           </div>
         </div>
-        <table class="data-table ranking-table">
+        <div id="rankingTables"></div>
+        <table class="data-table ranking-table" hidden>
           <thead><tr><th>Platz</th><th>Startnummer</th><th>Name</th><th>Geschlecht</th><th>Bestes Ergebnis</th><th>Alle Durchgänge</th></tr></thead>
           <tbody id="rankingTableBody"></tbody>
         </table>
