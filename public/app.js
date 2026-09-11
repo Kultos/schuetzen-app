@@ -68,7 +68,7 @@ document.querySelectorAll('.tab').forEach((btn) => {
     document.querySelectorAll('.tab').forEach((b) => b.classList.remove('active'));
     document.querySelectorAll('.panel').forEach((p) => p.classList.remove('active'));
     btn.classList.add('active');
-    document.querySelector('main').classList.toggle('results-main', btn.dataset.tab === 'results');
+    document.querySelector('main').classList.toggle('results-main', ['results', 'rankings'].includes(btn.dataset.tab));
     document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
     if (btn.dataset.tab === 'dashboard') startDashboard();
     else stopDashboard();
@@ -469,21 +469,65 @@ function fillSelect(selectEl, items, valueKey, labelFn) {
 
 // ---------------- Rankings ----------------
 
+const rankingView = { disciplineId: null, request: 0 };
+
+function renderRankingDisciplines() {
+  const nav = document.getElementById('rankingDisciplines');
+  nav.replaceChildren();
+  for (const discipline of state.disciplines) {
+    nav.appendChild(el('button', {
+      type: 'button', class: 'result-shooter',
+      'aria-pressed': String(discipline.id === rankingView.disciplineId),
+      onclick: () => {
+        rankingView.disciplineId = discipline.id;
+        renderRankingDisciplines();
+        loadRanking();
+      },
+    }, [
+      el('span', { text: discipline.name }),
+      el('small', { text: discipline.ranking_mode === 'separate' ? 'Frauen / Männer getrennt' : 'Gemeinsame Wertung' }),
+    ]));
+  }
+  if (!state.disciplines.length) nav.appendChild(el('p', { class: 'hint', text: 'Noch keine Disziplinen angelegt.' }));
+}
+
 async function refreshRankingSelector() {
   if (!state.disciplines.length) await loadDisciplines();
-  fillSelect(document.getElementById('rankingDisciplineSelect'), state.disciplines, 'id', (d) => d.name);
+  if (!state.disciplines.some((d) => d.id === rankingView.disciplineId)) {
+    rankingView.disciplineId = state.disciplines[0]?.id ?? null;
+  }
+  renderRankingDisciplines();
   await loadRanking();
 }
 
 async function loadRanking() {
-  const disciplineId = document.getElementById('rankingDisciplineSelect').value;
+  const disciplineId = rankingView.disciplineId;
+  const request = ++rankingView.request;
+  const eventId = state.eventId;
   const tables = document.getElementById('rankingTables');
-  tables.innerHTML = '';
-  if (!disciplineId) return;
+  const status = document.getElementById('rankingStatus');
+  const printButton = document.getElementById('printRankingBtn');
+  tables.replaceChildren();
+  printButton.disabled = true;
   const discipline = state.disciplines.find((d) => String(d.id) === String(disciplineId));
+  document.getElementById('rankingDisciplineName').textContent = discipline ? discipline.name : 'Disziplin auswählen';
   document.getElementById('printTitle').textContent = 'Rangliste – ' + (discipline ? discipline.name : '');
+  if (!discipline) {
+    status.textContent = 'Sobald Disziplinen angelegt sind, erscheinen hier die Ranglisten.';
+    return;
+  }
   document.getElementById('printDate').textContent = 'Stand: ' + new Date().toLocaleDateString('de-DE');
-  const ranking = await api(`/api/rankings/${disciplineId}`);
+  status.textContent = 'Rangliste wird geladen …';
+  let ranking;
+  try {
+    ranking = await api(`/api/rankings/${disciplineId}`);
+  } catch (error) {
+    if (request === rankingView.request && eventId === state.eventId) status.textContent = 'Rangliste konnte nicht geladen werden: ' + error.message + ' Bitte die Disziplin erneut auswählen.';
+    return;
+  }
+  if (request !== rankingView.request || eventId !== state.eventId) return;
+  status.textContent = ranking.length ? '' : 'Für diese Disziplin sind noch keine Ergebnisse erfasst.';
+  printButton.disabled = !ranking.length;
   const groups = discipline.ranking_mode === 'separate' ? [['women','Frauen'],['men','Männer']] : [['combined','Gemeinsame Wertung']];
   for (const [group, label] of groups) {
     const rows = ranking.filter((r) => r.ranking_group === group);
@@ -505,7 +549,6 @@ async function loadRanking() {
   }
 }
 
-document.getElementById('rankingDisciplineSelect').addEventListener('change', loadRanking);
 document.getElementById('printRankingBtn').addEventListener('click', () => window.print());
 
 // ---------------- Import ----------------

@@ -37,6 +37,13 @@ main.results-main { max-width: 1320px; }
 #tab-results button:disabled { opacity: .55; cursor: wait; }
 #tab-results :focus-visible { outline: 3px solid #b48121; outline-offset: 2px; }
 #resultFeedback:not(:empty) { padding: 12px; background: #edf3e8; border-radius: 7px; }
+.ranking-sidebar-title { margin: 0 0 16px; font-size: 16px; }
+#rankingDisciplines { display: grid; gap: 7px; max-height: 65vh; overflow-y: auto; }
+#rankingDisciplines button small { display: block; margin-top: 5px; font-weight: 400; color: #55665e; }
+#tab-rankings button { min-height: 44px; }
+#tab-rankings button:disabled { opacity: .55; cursor: default; }
+#tab-rankings :focus-visible { outline: 3px solid #b48121; outline-offset: 2px; }
+#rankingTables { overflow-x: auto; }
 @media (max-width: 1050px) {
   .results-workspace { grid-template-columns: 235px minmax(0, 1fr); }
   .result-discipline-main { grid-template-columns: minmax(0, 1fr) 90px; }
@@ -45,9 +52,9 @@ main.results-main { max-width: 1320px; }
 @media (max-width: 700px) {
   .results-workspace { grid-template-columns: 1fr; }
   .results-sidebar { border-right: none; border-bottom: 1px solid var(--border); }
-  #resultShooters { max-height: 190px; }
+  #resultShooters, #rankingDisciplines { max-height: 190px; }
   .results-overview { padding: 16px; }
-  #tab-results { padding: 14px; }
+  #tab-results, #tab-rankings { padding: 14px; }
 }
 
 * { box-sizing: border-box; }
@@ -332,6 +339,9 @@ body.tv-mode .tv-only { display: block; }
 }
 
 @media print {
+  #tab-rankings .no-print, #rankingStatus { display: none; }
+  .rankings-workspace { display: block; overflow: visible; border: 0; }
+  #rankingTables { overflow: visible; }
   body * { visibility: hidden; }
   #rankingPrintArea, #rankingPrintArea * { visibility: visible; }
   #rankingPrintArea { position: absolute; top: 0; left: 0; width: 100%; }

@@ -176,24 +176,34 @@
     <!-- RANGLISTEN -->
     <section id="tab-rankings" class="panel">
       <h2>Ranglisten</h2>
-      <div class="inline-form no-print">
-        <select id="rankingDisciplineSelect"></select>
-        <button id="printRankingBtn">Drucken / Als PDF</button>
-      </div>
-      <div id="rankingPrintArea">
-        <div class="print-header">
-          <img id="printLogo" src="/logo.png" alt="">
-          <div>
-            <h1 id="printEventTitle"></h1>
-            <h2 id="printTitle">Rangliste</h2>
-            <div id="printDate"></div>
+      <p class="no-print">Disziplin auswählen und die aktuelle Wertung auf einen Blick sehen.</p>
+      <div class="results-workspace rankings-workspace">
+        <aside class="results-sidebar no-print" aria-label="Disziplin auswählen">
+          <h3 class="ranking-sidebar-title">Disziplinen</h3>
+          <nav id="rankingDisciplines" aria-label="Ranglisten nach Disziplin"></nav>
+        </aside>
+        <div class="results-overview">
+          <header class="results-heading no-print">
+            <h3 id="rankingDisciplineName">Disziplin auswählen</h3>
+            <button id="printRankingBtn" disabled>Drucken / Als PDF</button>
+          </header>
+          <p id="rankingStatus" role="status"></p>
+          <div id="rankingPrintArea">
+            <div class="print-header">
+              <img id="printLogo" src="/logo.png" alt="">
+              <div>
+                <h1 id="printEventTitle"></h1>
+                <h2 id="printTitle">Rangliste</h2>
+                <div id="printDate"></div>
+              </div>
+            </div>
+            <div id="rankingTables"></div>
+            <table class="data-table ranking-table" hidden>
+              <thead><tr><th>Platz</th><th>Startnummer</th><th>Name</th><th>Geschlecht</th><th>Bestes Ergebnis</th><th>Alle Durchgänge</th></tr></thead>
+              <tbody id="rankingTableBody"></tbody>
+            </table>
           </div>
         </div>
-        <div id="rankingTables"></div>
-        <table class="data-table ranking-table" hidden>
-          <thead><tr><th>Platz</th><th>Startnummer</th><th>Name</th><th>Geschlecht</th><th>Bestes Ergebnis</th><th>Alle Durchgänge</th></tr></thead>
-          <tbody id="rankingTableBody"></tbody>
-        </table>
       </div>
     </section>
 
