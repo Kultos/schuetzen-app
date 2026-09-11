@@ -10,18 +10,34 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $appUrl = "http://localhost:$Port/"
-$healthUrl = "http://localhost:$Port/api/health"
+# The server listens on IPv4. On Windows, localhost may try IPv6 first and
+# exhaust the short readiness timeout before falling back to IPv4.
+$healthUrl = "http://127.0.0.1:$Port/api/health"
+if (-not $LogDirectory) {
+  $LogDirectory = Join-Path (Split-Path -Parent $PSScriptRoot) 'data\logs'
+}
+
+function Write-LauncherLog([string]$Message) {
+  try {
+    New-Item -ItemType Directory -Path $LogDirectory -Force | Out-Null
+    Add-Content -LiteralPath (Join-Path $LogDirectory 'launcher.log') -Value ('{0} {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Message)
+  } catch {
+    # A logging failure must not prevent opening the app.
+  }
+}
 
 function Test-AppReady {
   try {
     $response = Invoke-RestMethod -Uri $healthUrl -Method Get -TimeoutSec 2
     return $response.status -eq 'ok' -and $response.application -eq 'schuetzen-app'
   } catch {
+    Write-LauncherLog ('Bereitschaftspruefung fehlgeschlagen: ' + $_.Exception.Message)
     return $false
   }
 }
 
 try {
+  Write-LauncherLog "Launcher gestartet: $appUrl"
   if (-not (Test-AppReady)) {
     # Starting or querying a task can briefly fail while an elevated setup is
     # still finishing. Always wait for readiness before reporting that failure.
@@ -39,16 +55,17 @@ try {
   }
 
   if (-not (Test-AppReady)) {
-    if (-not $LogDirectory) {
-      $appPath = Split-Path -Parent $PSScriptRoot
-      $LogDirectory = Join-Path $appPath 'data\logs'
-    }
     $details = if ($taskStartError) { " Aufgabenplanung: $taskStartError" } else { '' }
     throw "Die App konnte nicht gestartet werden. Hinweise stehen unter $LogDirectory.$details"
   }
 
-  Start-Process $appUrl
+  # The shortcut runs this script hidden. Explicitly show the browser instead
+  # of allowing it to inherit the launcher's hidden window state.
+  Write-LauncherLog 'Server bereit. Browser wird geoeffnet.'
+  Start-Process -FilePath $appUrl -WindowStyle Normal
+  Write-LauncherLog 'Browser-Aufruf an Windows uebergeben.'
 } catch {
+  Write-LauncherLog ('FEHLER: ' + $_.Exception.Message)
   Add-Type -AssemblyName PresentationFramework
   $dialogTitle = 'Sch{0}tzen-App - Start fehlgeschlagen' -f ([char]0x00FC)
   [System.Windows.MessageBox]::Show(

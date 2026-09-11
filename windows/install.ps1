@@ -27,6 +27,7 @@ $appPath = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $runnerPath = Join-Path $PSScriptRoot 'run-server.ps1'
 $openerPath = Join-Path $PSScriptRoot 'open-app.ps1'
 $openerWrapperPath = Join-Path $PSScriptRoot 'open-app.vbs'
+$iconPath = Join-Path $PSScriptRoot 'schuetzen-app.ico'
 $firewallPath = Join-Path $PSScriptRoot 'configure-firewall.ps1'
 $powerShellPath = Join-Path $PSHOME 'powershell.exe'
 $wscriptPath = Join-Path $env:SystemRoot 'System32\wscript.exe'
@@ -49,6 +50,7 @@ function Assert-InstallationPrerequisites {
     $runnerPath,
     $openerPath,
     $openerWrapperPath,
+    $iconPath,
     $firewallPath
   )) {
     if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
@@ -145,7 +147,7 @@ try {
   $shortcut.Arguments = '{0} -TaskName {1} -Port {2} -LogDirectory {3}' -f `
     (Quote-Argument $openerWrapperPath), (Quote-Argument $taskName), $Port, (Quote-Argument (Join-Path $effectiveDataDirectory 'logs'))
   $shortcut.WorkingDirectory = $appPath
-  $shortcut.IconLocation = "$env:SystemRoot\System32\shell32.dll,220"
+  $shortcut.IconLocation = "$iconPath,0"
   $shortcut.Description = $shortcutLabel
   $shortcut.WindowStyle = 7
   $shortcut.Save()
