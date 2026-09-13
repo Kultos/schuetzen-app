@@ -30,6 +30,19 @@ function el(tag, attrs = {}, children = []) {
   return e;
 }
 
+function splitShooterName(name) {
+  const normalized = String(name || '').trim().replace(/\s+/g, ' ');
+  const comma = normalized.indexOf(',');
+  if (comma >= 0) return {
+    firstName: normalized.slice(comma + 1).trim(),
+    lastName: normalized.slice(0, comma).trim(),
+  };
+  const parts = normalized.split(' ');
+  return parts.length > 1
+    ? { firstName: parts.slice(0, -1).join(' '), lastName: parts.at(-1) }
+    : { firstName: normalized, lastName: '' };
+}
+
 let state = {
   shooters: [],
   disciplines: [],
@@ -357,10 +370,11 @@ function renderShooterRow(s) {
 
 function renderShooterEditRow(s) {
   const team=state.teams.find(entry=>entry.members.some(member=>member.shooter_id===s.id));
+  const structuredName=splitShooterName(s.name);
   const startNumberInput = el('input', { class: 'edit-start-number', type: 'number', min: '1', step: '1', value: s.start_number });
   startNumberInput.value = s.start_number;
-  const nameInput = el('input', { type: 'text', value: s.name });
-  nameInput.value = s.name;
+  const firstNameInput = el('input', { type: 'text', value: structuredName.firstName, maxlength: '100', placeholder: 'Vorname', autocomplete: 'given-name' });
+  const lastNameInput = el('input', { type: 'text', value: structuredName.lastName, maxlength: '100', placeholder: 'Nachname', autocomplete: 'family-name' });
   const genderSelect = el('select', {}, [
     el('option', { value: 'm', text: 'männlich' }),
     el('option', { value: 'w', text: 'weiblich' }),
@@ -376,11 +390,12 @@ function renderShooterEditRow(s) {
   teamSelect.value=team?.id || '';
 
   const save = async () => {
-    const name = nameInput.value.trim();
+    const first_name = firstNameInput.value.trim();
+    const last_name = lastNameInput.value.trim();
     const start_number = Number(startNumberInput.value);
-    if (!name) { alert('Name darf nicht leer sein.'); return; }
+    if (!first_name || !last_name) { alert('Vorname und Nachname dürfen nicht leer sein.'); return; }
     if (!Number.isSafeInteger(start_number) || start_number < 1) { alert('Die Startnummer muss eine positive ganze Zahl sein.'); return; }
-    const payload = { name, gender: genderSelect.value, start_number, ...(teamModeEnabled()?{team_id:teamSelect.value?Number(teamSelect.value):null}:{}) };
+    const payload = { name: `${last_name}, ${first_name}`, first_name, last_name, gender: genderSelect.value, start_number, ...(teamModeEnabled()?{team_id:teamSelect.value?Number(teamSelect.value):null}:{}) };
     try {
       await api(`/api/shooters/${s.id}`, { method: 'PUT', body: JSON.stringify(payload) });
       editingShooterId = null;
@@ -405,11 +420,11 @@ function renderShooterEditRow(s) {
     editingShooterId = null;
     loadShooters();
   };
-  nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') cancel(); });
+  for (const input of [firstNameInput, lastNameInput]) input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') cancel(); });
 
   return el('tr', {}, [
     el('td', {}, [startNumberInput]),
-    el('td', {}, [nameInput]),
+    el('td', { class: 'name-fields' }, [firstNameInput, lastNameInput]),
     el('td', {}, [genderSelect]),
     teamModeEnabled() ? el('td', {}, [teamSelect]) : el('td', { text: team?.name || '–' }),
     el('td', { class: 'row-actions' }, [
@@ -421,19 +436,23 @@ function renderShooterEditRow(s) {
 
 document.getElementById('shooterForm').addEventListener('submit', async (e) => {
   e.preventDefault();
-  const name = document.getElementById('shooterName').value.trim();
+  const firstNameInput = document.getElementById('shooterFirstName');
+  const lastNameInput = document.getElementById('shooterLastName');
+  const first_name = firstNameInput.value.trim();
+  const last_name = lastNameInput.value.trim();
   const gender = document.getElementById('shooterGender').value;
   const startNumberInput = document.getElementById('shooterStartNumber');
   const teamSelect = document.getElementById('shooterTeam');
   const start_number = Number(startNumberInput.value);
-  if (!name) return;
+  if (!first_name || !last_name) return;
   if (!Number.isSafeInteger(start_number) || start_number < 1) { alert('Die Startnummer muss eine positive ganze Zahl sein.'); return; }
   try {
     const team_id = !teamSelect.disabled && teamSelect.value ? Number(teamSelect.value) : null;
-    await api('/api/shooters', { method: 'POST', body: JSON.stringify({ name, gender, start_number, team_id }) });
-    document.getElementById('shooterName').value = '';
+    await api('/api/shooters', { method: 'POST', body: JSON.stringify({ name: `${last_name}, ${first_name}`, first_name, last_name, gender, start_number, team_id }) });
+    firstNameInput.value = '';
+    lastNameInput.value = '';
     await loadShooters();
-    document.getElementById('shooterName').focus();
+    firstNameInput.focus();
   } catch (error) {
     if (error.code === 'START_NUMBER_CONFLICT' && error.suggested_start_number) {
       startNumberInput.value = error.suggested_start_number;

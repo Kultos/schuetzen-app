@@ -59,6 +59,16 @@ function normalizedName(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function shooterName(body) {
+  const hasStructuredName = Object.hasOwn(body, 'first_name') || Object.hasOwn(body, 'last_name');
+  if (!hasStructuredName) return normalizedName(body.name);
+  const firstName = normalizedName(body.first_name).replace(/\s+/g, ' ');
+  const lastName = normalizedName(body.last_name).replace(/\s+/g, ' ');
+  const name = `${lastName}, ${firstName}`;
+  if (!firstName || !lastName || firstName.length > 100 || lastName.length > 100 || name.length > 200) return '';
+  return name;
+}
+
 function parsePositiveInteger(value) {
   if (!['number', 'string'].includes(typeof value) || (typeof value === 'string' && !value.trim())) return null;
   const parsed = Number(value);
@@ -228,8 +238,8 @@ async function handleApi(req, res, pathname, query) {
   }
   if (pathname === '/api/shooters' && method === 'POST') {
     const body = await readEventBody(req);
-    const name = normalizedName(body.name);
-    if (!name || !body.gender) return sendError(res, 400, 'name und gender erforderlich');
+    const name = shooterName(body);
+    if (!name || !body.gender) return sendError(res, 400, 'Vorname, Nachname und Geschlecht sind erforderlich');
     if (!['m', 'w'].includes(body.gender)) return sendError(res, 400, "gender muss 'm' oder 'w' sein");
     const startNumber = Object.hasOwn(body, 'start_number') ? parsePositiveInteger(body.start_number) : Shooters.nextStartNumber();
     if (!startNumber) return sendError(res, 400, 'start_number muss eine positive ganze Zahl sein');
@@ -250,9 +260,9 @@ async function handleApi(req, res, pathname, query) {
     const id = Number(m[1]);
     if (method === 'PUT') {
       const body = await readEventBody(req);
-      const name = normalizedName(body.name);
+      const name = shooterName(body);
       if (!name || !['m', 'w'].includes(body.gender)) {
-        return sendError(res, 400, 'Gültiger Name und gender erforderlich');
+        return sendError(res, 400, 'Gültiger Vorname, Nachname und Geschlecht sind erforderlich');
       }
       const current = Shooters.findById(id);
       if (!current) return sendError(res, 404, 'Schütze nicht gefunden');

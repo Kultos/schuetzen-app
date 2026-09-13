@@ -62,10 +62,12 @@ let searchTimer;
 $('peopleSearch').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>loadPeople().catch(report),200);};
 function editPerson(p) {
   const root=detail(p?'Stammdaten bearbeiten':'Person anlegen'),form=el('form');
-  const name=el('input',{value:p?.name||'',required:'',maxlength:'200'});
+  const structuredName=splitShooterName(p?.name);
+  const firstName=el('input',{value:structuredName.firstName,required:'',maxlength:'100',autocomplete:'given-name'});
+  const lastName=el('input',{value:structuredName.lastName,required:'',maxlength:'100',autocomplete:'family-name'});
   const gender=el('select',{},[el('option',{value:'m',text:'männlich'}),el('option',{value:'w',text:'weiblich'})]);gender.value=p?.gender||'m';
-  form.append(field('Name',name),field('Geschlecht',gender),el('p',{text:'Stammdatenänderungen ändern keine bereits gespeicherten Eventlisten.'}),el('button',{text:'Speichern'}));
-  form.onsubmit=async e=>{e.preventDefault();try{await api('/api/people'+(p?'/'+p.id:''),json(p?'PUT':'POST',{name:name.value,gender:gender.value}));$('detailDialog').close();await loadPeople();}catch(error){report(error);}};
+  form.append(field('Vorname',firstName),field('Nachname',lastName),field('Geschlecht',gender),el('p',{text:'Stammdatenänderungen ändern keine bereits gespeicherten Eventlisten.'}),el('button',{text:'Speichern'}));
+  form.onsubmit=async e=>{e.preventDefault();const first_name=firstName.value.trim(),last_name=lastName.value.trim();try{await api('/api/people'+(p?'/'+p.id:''),json(p?'PUT':'POST',{name:`${last_name}, ${first_name}`,first_name,last_name,gender:gender.value}));$('detailDialog').close();await loadPeople();}catch(error){report(error);}};
   root.append(form);
 }
 $('newPersonBtn').onclick=()=>editPerson(null);

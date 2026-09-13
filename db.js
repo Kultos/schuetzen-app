@@ -5,7 +5,13 @@ const { db, all, get, run, transaction } = store;
 function fail(message, status = 400) { const e = new Error(message); e.status = status; throw e; }
 const positive = (v, label) => { if (!Number.isSafeInteger(v) || v < 1) fail(label + ' ist ungültig'); return v; };
 function person(data) {
-  const name = typeof data.name === 'string' ? data.name.trim() : '';
+  const hasStructuredName = Object.hasOwn(data, 'first_name') || Object.hasOwn(data, 'last_name');
+  const firstName = typeof data.first_name === 'string' ? data.first_name.trim().replace(/\s+/g, ' ') : '';
+  const lastName = typeof data.last_name === 'string' ? data.last_name.trim().replace(/\s+/g, ' ') : '';
+  const name = hasStructuredName ? `${lastName}, ${firstName}` : typeof data.name === 'string' ? data.name.trim() : '';
+  if (hasStructuredName && (!firstName || !lastName || firstName.length > 100 || lastName.length > 100)) {
+    fail('Vorname und Nachname sind erforderlich (jeweils max. 100 Zeichen)');
+  }
   if (!name || name.length > 200 || !['m','w'].includes(data.gender)) fail('Gültiger Name (max. 200 Zeichen) und Geschlecht erforderlich');
   return { name, gender: data.gender };
 }

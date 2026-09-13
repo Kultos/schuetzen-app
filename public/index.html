@@ -116,7 +116,8 @@
         <label class="start-number-field">Startnummer
           <input type="number" id="shooterStartNumber" min="1" step="1" required aria-describedby="startNumberHint">
         </label>
-        <input type="text" id="shooterName" placeholder="Name" required>
+        <input type="text" id="shooterFirstName" placeholder="Vorname" maxlength="100" autocomplete="given-name" required>
+        <input type="text" id="shooterLastName" placeholder="Nachname" maxlength="100" autocomplete="family-name" required>
         <select id="shooterGender">
           <option value="m">männlich</option>
           <option value="w">weiblich</option>
@@ -128,7 +129,7 @@
       </form>
       <p id="startNumberHint" class="hint">Die nächste freie Startnummer wird vorgeschlagen und kann vor dem Speichern geändert werden.</p>
       <table class="data-table">
-        <thead><tr><th>Startnummer</th><th>Name</th><th>Geschlecht</th><th>Mannschaft</th><th></th></tr></thead>
+        <thead><tr><th>Startnummer</th><th>Nachname, Vorname</th><th>Geschlecht</th><th>Mannschaft</th><th></th></tr></thead>
         <tbody id="shooterTableBody"></tbody>
       </table>
     </section>

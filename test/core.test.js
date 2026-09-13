@@ -138,6 +138,34 @@ test('Dateneingabe und Datenänderungen funktionieren mit isolierter SQLite-Date
   assert.deepEqual(Results.listForShooterDiscipline(anna.id, gewehr.id), []);
 });
 
+test('Vorname und Nachname werden getrennt validiert und einheitlich gespeichert', async () => {
+  let result = await api('/api/shooters', {
+    method: 'POST',
+    json: { first_name: '  Anna   Maria ', last_name: '  von Test  ', gender: 'w', start_number: 1 },
+  });
+  assert.equal(result.response.status, 201);
+  assert.equal(result.body.name, 'von Test, Anna Maria');
+
+  result = await api('/api/shooters', {
+    method: 'POST',
+    json: { first_name: 'Nurvorname', last_name: '  ', gender: 'm', start_number: 2 },
+  });
+  assert.equal(result.response.status, 400);
+
+  const person = (await api('/api/people', {
+    method: 'POST',
+    json: { first_name: 'Erika', last_name: 'Musterfrau', gender: 'w' },
+  })).body;
+  assert.equal(person.name, 'Musterfrau, Erika');
+
+  result = await api(`/api/people/${person.id}`, {
+    method: 'PUT',
+    json: { first_name: 'Erika Maria', last_name: 'von Musterfrau', gender: 'w' },
+  });
+  assert.equal(result.response.status, 200);
+  assert.equal(result.body.name, 'von Musterfrau, Erika Maria');
+});
+
 test('Startnummern werden vorgeschlagen, bleiben eindeutig und können bei Konflikten getauscht werden', async () => {
   let result = await api('/api/shooters/next-start-number');
   assert.deepEqual(result.body, { start_number: 1 });

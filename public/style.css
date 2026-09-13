@@ -129,6 +129,8 @@ input[type="email"], input[type="password"], input[type="search"] { padding: .5r
 #loginError { color: #a00; }
 #backupList { overflow-wrap: anywhere; }
 #shooterForm input, #shooterForm select, #shooterForm button { height: 2.35rem; }
+.name-fields { display: flex; flex-wrap: wrap; gap: .35rem; }
+.name-fields input { min-width: 8rem; width: 10rem; }
 
 input[type="text"], input[type="number"], select {
   padding: 0.5rem 0.6rem;
