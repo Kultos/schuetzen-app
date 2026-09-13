@@ -22,6 +22,7 @@
     <nav class="tabs">
       <button data-tab="dashboard" class="tab">Live-Dashboard</button>
       <button data-tab="shooters" class="tab active">Schützen</button>
+      <button data-tab="teams" class="tab">Mannschaften</button>
       <button data-tab="people" class="tab">Schützenstamm &amp; Historie</button>
       <button data-tab="disciplines" class="tab">Disziplinen</button>
       <button data-tab="results" class="tab">Ergebnisse erfassen</button>
@@ -75,11 +76,17 @@
 
         <nav id="dashboardDisciplineNav" class="discipline-nav" aria-label="Disziplin auswählen"></nav>
 
+        <div id="dashboardRankingMode" class="dashboard-ranking-mode" hidden aria-label="Wertung auswählen">
+          <span>Anzeige</span>
+          <button id="dashboardIndividualRankingBtn" type="button">Einzelwertung</button>
+          <button id="dashboardTeamRankingBtn" type="button">Mannschaftswertung</button>
+        </div>
+
         <div class="live-grid">
           <article class="live-card leaderboard-card">
             <div class="live-card-heading">
               <div>
-                <span>Aktuelle Rangliste</span>
+                <span id="dashboardRankingKind">Aktuelle Rangliste</span>
                 <h3 id="dashboardDisciplineTitle">Noch keine Disziplin</h3>
               </div>
               <span id="dashboardRotationProgress" class="rotation-progress" aria-hidden="true"></span>
@@ -135,6 +142,34 @@
       </div>
     </section>
 
+    <!-- MANNSCHAFTEN -->
+    <section id="tab-teams" class="panel">
+      <h2>Mannschaften</h2>
+      <p>Mannschaften anlegen und Teilnehmer des aktuellen Events eindeutig zuordnen.</p>
+      <form id="teamForm" class="inline-form">
+        <input id="teamName" type="text" maxlength="200" required placeholder="Name der Mannschaft">
+        <button type="submit">Mannschaft hinzufügen</button>
+      </form>
+      <p id="teamRules" class="hint"></p>
+      <div class="results-workspace team-workspace">
+        <aside class="results-sidebar" aria-label="Mannschaft auswählen">
+          <h3 class="ranking-sidebar-title">Mannschaften</h3>
+          <div id="teamList" class="sidebar-options"></div>
+        </aside>
+        <div class="results-overview members-overview">
+          <header id="selectedTeamHeader" class="results-heading"><h3>Mannschaft auswählen</h3></header>
+          <label class="results-filter member-search-label">Teilnehmer suchen <input id="memberSearch" type="search" placeholder="Name oder Startnummer …"></label>
+          <div class="table-scroll">
+            <table class="data-table">
+              <thead><tr><th>Startnummer</th><th>Name</th><th>Aktuelle Mannschaft</th><th>Zuordnen</th></tr></thead>
+              <tbody id="teamMemberRows"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <p id="teamFeedback" role="status" aria-live="polite"></p>
+    </section>
+
     <!-- DISZIPLINEN -->
     <section id="tab-disciplines" class="panel">
       <h2>Disziplinen</h2>
@@ -162,14 +197,15 @@
           <p id="resultSearchCount" class="hint" role="status"></p>
         </aside>
         <div class="results-overview">
-          <header class="results-heading"><h3 id="resultShooterName" tabindex="-1">Schützen auswählen</h3><span id="resultProgress" class="hint"></span></header>
+          <header class="results-heading"><div><h3 id="resultShooterName" tabindex="-1">Schützen auswählen</h3><span id="resultTeam" class="team-badge" hidden></span></div><span id="resultProgress" class="hint"></span></header>
           <label class="results-filter"><input id="resultShotOnly" type="checkbox"> Nur mit Ergebnissen</label>
           <p id="resultLoadStatus" role="status"></p>
           <div id="resultDisciplines"></div>
         </div>
       </div>
       <p id="resultFeedback" role="status" aria-live="polite"></p>
-      <p class="hint">Hinweis: Für die Rangliste zählt automatisch der beste Durchgang; bei Gleichstand entscheidet der nächstbeste.</p>
+      <p id="individualRankingHint" class="hint">Hinweis: Für die Einzelrangliste zählt automatisch der beste Durchgang; bei Gleichstand entscheidet der nächstbeste.</p>
+      <p id="teamSelectionHint" class="hint" hidden>Für die Mannschaftswertung muss je Schütze und Disziplin genau ein Durchgang ausdrücklich markiert werden. Die Auswahl kann jederzeit geändert oder entfernt werden.</p>
       <p class="hint">„Noch kein Ergebnis“ bedeutet: kein Durchgang erfasst. Daraus lässt sich keine Anmeldung oder Schießpflicht ableiten.</p>
     </section>
 
@@ -187,6 +223,11 @@
             <h3 id="rankingDisciplineName">Disziplin auswählen</h3>
             <button id="printRankingBtn" disabled>Drucken / Als PDF</button>
           </header>
+          <div id="rankingModeTabs" class="ranking-mode-tabs no-print" hidden>
+            <button id="individualRankingBtn" type="button" data-ranking-mode="individual">Einzelwertung</button>
+            <button id="teamRankingBtn" type="button" data-ranking-mode="team">Mannschaftswertung</button>
+          </div>
+          <p id="rankingExplanation" class="hint"></p>
           <p id="rankingStatus" role="status"></p>
           <div id="rankingPrintArea">
             <div class="print-header">
@@ -251,6 +292,24 @@
           <label>Veranstaltungsjahr <input type="number" id="seasonYear" min="1900" max="2200" required></label>
           <button type="submit">Titel speichern</button>
           <span id="seasonTitleStatus" class="hint" aria-live="polite"></span>
+        </form>
+      </div>
+      <div class="card">
+        <h3>Mannschaftswertung</h3>
+        <p class="hint">Die Einstellungen gelten für das aktuelle Event. Bestehende Events bleiben standardmäßig bei der Einzelwertung.</p>
+        <form id="teamSettingsForm" class="settings-form">
+          <fieldset>
+            <legend>Aktive Wertungen</legend>
+            <label><input type="radio" name="teamScoringMode" value="individual"> Nur Einzelwertung</label>
+            <label><input type="radio" name="teamScoringMode" value="team"> Nur Mannschaftswertung</label>
+            <label><input type="radio" name="teamScoringMode" value="both"> Einzel- und Mannschaftswertung</label>
+          </fieldset>
+          <div class="inline-form settings-numbers">
+            <label>Maximale Mitgliederzahl <input id="teamMaxMembers" type="number" min="1" max="100" required></label>
+            <label>Gewertete Ergebnisse <input id="teamCountedResults" type="number" min="1" max="100" required></label>
+            <button type="submit">Einstellungen speichern</button>
+          </div>
+          <p id="teamSettingsStatus" class="hint" role="status"></p>
         </form>
       </div>
       <div class="card">

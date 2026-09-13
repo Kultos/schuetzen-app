@@ -55,10 +55,11 @@ async function refreshResultSelectors() {
     resultView.drafts.clear();
   }
   try {
-    const [shooters, disciplines] = await Promise.all([api('/api/shooters'), api('/api/disciplines')]);
+    const [shooters, disciplines, teams] = await Promise.all([api('/api/shooters'), api('/api/disciplines'), api('/api/teams')]);
     if (request !== resultView.request) return;
     state.shooters = shooters;
     state.disciplines = disciplines;
+    state.teams = teams;
     if (!shooters.some((s) => s.id === resultView.shooterId)) resultView.shooterId = shooters[0]?.id ?? null;
     renderResultShooters();
     await loadResultsList();
@@ -77,7 +78,11 @@ async function loadResultsList() {
   const shooterId = resultView.shooterId;
   const eventId = state.eventId;
   const shooter = state.shooters.find((s) => s.id === shooterId);
+  const team = (state.teams || []).find((entry) => entry.members.some((member) => member.shooter_id === shooterId));
+  const teamsEnabled = state.event && state.event.scoring_mode !== 'individual';
   resultElement('resultShooterName').textContent = shooter ? `#${shooter.start_number} · ${shooter.name}` : 'Schützen auswählen';
+  resultElement('resultTeam').hidden = !shooter || !teamsEnabled;
+  resultElement('resultTeam').textContent = team ? `Mannschaft: ${team.name}` : 'Noch keiner Mannschaft zugeordnet';
   resultLoading(shooter ? 'Ergebnisse werden geladen …' : 'Zuerst einen Teilnehmer unter „Schützen“ anlegen.');
   if (!shooter) return;
   try {
@@ -98,6 +103,8 @@ function renderResultDisciplines() {
   const container = resultElement('resultDisciplines');
   container.replaceChildren();
   const shooter = state.shooters.find((s) => s.id === resultView.shooterId);
+  const team = (state.teams || []).find((entry) => entry.members.some((member) => member.shooter_id === resultView.shooterId));
+  const teamsEnabled = state.event && state.event.scoring_mode !== 'individual';
   const count = new Set(resultView.rows.map((r) => r.discipline_id)).size;
   resultElement('resultProgress').textContent = `${count} / ${state.disciplines.length} Disziplinen mit Ergebnissen`;
   for (const discipline of state.disciplines) {
@@ -111,6 +118,18 @@ function renderResultDisciplines() {
     ]);
     const rounds = el('div', { class: 'result-rounds' });
     for (const row of rows) {
+      const selectedForTeam = Boolean(row.team_selected);
+      const teamSelect = teamsEnabled && team ? el('button', {
+        type: 'button', class: `team-select${selectedForTeam ? ' active' : ''}`, text: selectedForTeam ? '✓ Für Team gewertet' : 'Für Team werten',
+        'aria-pressed': String(selectedForTeam),
+        title: selectedForTeam ? 'Aus Mannschaftswertung entfernen' : 'Diesen Durchgang für die Mannschaft auswählen',
+        onclick: () => {
+          if (resultView.busy) return;
+          mutateResult(`/api/results/${row.id}/team-selection`, { method: 'PUT', body: JSON.stringify({selected:!selectedForTeam}) },
+            `${shooter.name} · ${discipline.name}: Mannschaftsdurchgang ${selectedForTeam ? 'entfernt' : 'markiert'}.`);
+        },
+      }) : null;
+      if(teamSelect) teamSelect.disabled=resultView.busy;
       const remove = el('button', {
         type: 'button', class: 'link danger-text', text: '×',
         'aria-label': `${discipline.name}: Durchgang ${row.round_number} mit ${formatPoints(row.points)} Punkten löschen`,
@@ -121,9 +140,10 @@ function renderResultDisciplines() {
         },
       });
       remove.disabled = resultView.busy;
-      rounds.appendChild(el('span', { class: `result-round${row.points === best ? ' best' : ''}`, title: row.points === best ? 'Bester Durchgang' : 'Durchgang' }, [
+      const round = el('span', { class: `result-round${row.points === best ? ' best' : ''}`, title: row.points === best ? 'Bester Durchgang' : 'Durchgang' }, [
         el('span', { text: `D${row.round_number} · ${formatPoints(row.points)}` }), remove,
-      ]));
+      ]);
+      rounds.appendChild(el('span', { class: `result-round-item${selectedForTeam ? ' team-selected' : ''}` }, [round,...(teamSelect ? [teamSelect] : [])]));
     }
     details.appendChild(rounds);
     const score = el('div', { class: 'result-best', text: best === null ? '–' : formatPoints(best) }, [el('small', { text: 'Bestwert · Punkte' })]);

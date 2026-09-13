@@ -60,7 +60,7 @@ test('Fehlgeschlagene Migration lässt das alte Schema und alle Datensätze inta
   } finally {fs.rmSync(dir,{recursive:true,force:true});}
 });
 
-test('Schema 2 wird mit Platzierungsbeziehungen, UUID-Aliasen und gemeinsamer Wertung auf Schema 4 aktualisiert',()=>{
+test('Schema 2 wird mit Platzierungsbeziehungen, UUID-Aliasen und gemeinsamer Wertung auf das aktuelle Schema aktualisiert',()=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'schuetzen-v2-'));
   const file=path.join(dir,'wettkampf.db'),seed=new DatabaseSync(file);
   seed.exec(`
@@ -86,7 +86,7 @@ test('Schema 2 wird mit Platzierungsbeziehungen, UUID-Aliasen und gemeinsamer We
     const code="const S=require('./storage'); console.log(JSON.stringify({version:S.get('PRAGMA user_version').user_version,aliases:S.get(\"SELECT COUNT(*) AS n FROM sqlite_master WHERE name='person_aliases'\").n,fks:S.all('PRAGMA foreign_key_list(placements)').length}));S.db.close();";
     const result=spawnSync(process.execPath,['-e',code],{cwd:path.join(__dirname,'..'),env:{...process.env,SCHUETZEN_DATA_DIR:dir},encoding:'utf8'});
     assert.equal(result.status,0,result.stderr);
-    assert.deepEqual(JSON.parse(result.stdout),{version:4,aliases:1,fks:5});
+    assert.deepEqual(JSON.parse(result.stdout),{version:5,aliases:1,fks:5});
     assert.equal(fs.readdirSync(path.join(dir,'backups')).filter(n=>n.endsWith('.sqlite')).length,1);
   } finally {fs.rmSync(dir,{recursive:true,force:true});}
 });
@@ -101,7 +101,28 @@ test('Schema 3 erhält beim Update die gemeinsame Wertung als sicheren Standard'
     const code="const S=require('./storage'); console.log(JSON.stringify({version:S.get('PRAGMA user_version').user_version,mode:S.get('SELECT ranking_mode FROM disciplines').ranking_mode}));S.db.close();";
     const result=spawnSync(process.execPath,['-e',code],{cwd:path.join(__dirname,'..'),env:{...process.env,SCHUETZEN_DATA_DIR:dir},encoding:'utf8'});
     assert.equal(result.status,0,result.stderr);
-    assert.deepEqual(JSON.parse(result.stdout),{version:4,mode:'combined'});
+    assert.deepEqual(JSON.parse(result.stdout),{version:5,mode:'combined'});
+    assert.equal(fs.readdirSync(path.join(dir,'backups')).filter(n=>n.endsWith('.sqlite')).length,1);
+  } finally {fs.rmSync(dir,{recursive:true,force:true});}
+});
+
+test('Schema 4 erhält Mannschaftstabellen und bleibt standardmäßig eine Einzelwertung',()=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'schuetzen-v4-'));
+  const file=path.join(dir,'wettkampf.db'),seed=new DatabaseSync(file);
+  seed.exec(`
+    CREATE TABLE shooters(id INTEGER PRIMARY KEY,uuid TEXT,name TEXT,gender TEXT,archived_at TEXT,created_at TEXT,updated_at TEXT);
+    CREATE TABLE events(id INTEGER PRIMARY KEY,uuid TEXT,title TEXT,year INTEGER,status TEXT,revision INTEGER,ranking_version TEXT,reconstructed INTEGER,correction_reason TEXT,created_at TEXT,closed_at TEXT);
+    CREATE TABLE participants(id INTEGER PRIMARY KEY,event_id INTEGER,shooter_id INTEGER,start_number INTEGER,name TEXT,gender TEXT,created_at TEXT,UNIQUE(id,event_id));
+    CREATE TABLE disciplines(id INTEGER PRIMARY KEY,event_id INTEGER,name TEXT,ranking_mode TEXT,sort_order INTEGER,created_at TEXT,UNIQUE(id,event_id));
+    CREATE TABLE results(id INTEGER PRIMARY KEY,event_id INTEGER,participant_id INTEGER,discipline_id INTEGER,round_number INTEGER,points REAL,created_at TEXT);
+    INSERT INTO events VALUES(1,'20000000-0000-4000-8000-000000000001','Alt',2026,'active',0,'series-name-v1',0,NULL,'2026',NULL);
+    PRAGMA user_version=4;
+  `);seed.close();
+  try {
+    const code="const S=require('./storage'); const e=S.get('SELECT scoring_mode,team_max_members,team_counted_results FROM events'); console.log(JSON.stringify({version:S.get('PRAGMA user_version').user_version,event:e,teams:!!S.get(\"SELECT name FROM sqlite_master WHERE name='teams'\")}));S.db.close();";
+    const result=spawnSync(process.execPath,['-e',code],{cwd:path.join(__dirname,'..'),env:{...process.env,SCHUETZEN_DATA_DIR:dir},encoding:'utf8'});
+    assert.equal(result.status,0,result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout),{version:5,event:{scoring_mode:'individual',team_max_members:5,team_counted_results:3},teams:true});
     assert.equal(fs.readdirSync(path.join(dir,'backups')).filter(n=>n.endsWith('.sqlite')).length,1);
   } finally {fs.rmSync(dir,{recursive:true,force:true});}
 });

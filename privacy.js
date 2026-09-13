@@ -57,6 +57,15 @@ function applyEntry(entry) {
     run('DELETE FROM consent_log WHERE shooter_id=?',[s.id]);
     run("UPDATE shooters SET name='Gelöschter Teilnehmer',archived_at=?,updated_at=? WHERE id=?",[entry.at,entry.at,s.id]);
     run("UPDATE participants SET name='Gelöschter Teilnehmer' WHERE shooter_id=?",[s.id]);
+    for(const row of all('SELECT event_id,revision,team_id,discipline_id,counted_results FROM team_placements')) {
+      let snapshot;
+      try { snapshot=JSON.parse(row.counted_results); } catch { continue; }
+      const entries=Array.isArray(snapshot) ? snapshot : snapshot.entries;
+      if(!Array.isArray(entries) || !entries.some(result=>result.shooter_id===s.id)) continue;
+      for(const result of entries) if(result.shooter_id===s.id) result.name='Gelöschter Teilnehmer';
+      run('UPDATE team_placements SET counted_results=? WHERE event_id=? AND revision=? AND team_id=? AND discipline_id=?',
+        [JSON.stringify(snapshot),row.event_id,row.revision,row.team_id,row.discipline_id]);
+    }
   } else if(entry.action==='revoke') {
     run('DELETE FROM contacts WHERE shooter_id=? AND consent_at<=?',[s.id,entry.at]);
   } else run('DELETE FROM consent_log WHERE shooter_id=? AND julianday(created_at)<=julianday(?)',[s.id,entry.at]);

@@ -146,7 +146,8 @@ async function startNextEvent() {
 }
 async function showEvent(id) {
   const a=await api('/api/events/'+id),root=detail((a.event.year||'Jahr offen')+' – '+a.event_title);
-  root.append(el('p',{text:'Status: '+a.event.status+' · Abschlussversion '+a.event.revision+' · Wertung: beste Serien, bei vollständigem Gleichstand alphabetisch.'}),action('Eventdatei herunterladen',()=>download('event-'+a.event.uuid+'-r'+a.event.revision+'.json',a)));
+  const scoringLabel=a.event.scoring_mode==='team'?'nur Mannschaft':a.event.scoring_mode==='both'?'Einzel und Mannschaft':'nur Einzel';
+  root.append(el('p',{text:'Status: '+a.event.status+' · Abschlussversion '+a.event.revision+' · Wertung: '+scoringLabel+'. Einzel: beste Serien; Mannschaft: beste '+a.event.team_counted_results+' markierte Ergebnisse.'}),action('Eventdatei herunterladen',()=>download('event-'+a.event.uuid+'-r'+a.event.revision+'.json',a)));
   for(const c of a.closures)root.append(el('p',{text:'Abschluss '+c.revision+': '+c.reason+' ('+c.created_at+')'}));
   if(a.event.status==='closed') {
     const reason=el('input',{placeholder:'Korrektur begründen',maxlength:'500'});
@@ -167,6 +168,10 @@ async function showEvent(id) {
   for(const d of a.disciplines) {
     root.append(el('h3',{text:d.name}));
     for(const p of a.placements.filter(p=>p.discipline_id===d.id).sort((x,y)=>x.rank-y.rank))root.append(el('p',{text:'Platz '+p.rank+': '+a.shooters.find(s=>s.id===p.shooter_id)?.name+' – '+formatPoints(p.best_points)}));
+    if(a.event.scoring_mode!=='individual') {
+      root.append(el('h4',{text:'Mannschaftswertung'}));
+      for(const p of a.team_placements.filter(p=>p.discipline_id===d.id).sort((x,y)=>x.rank-y.rank))root.append(el('p',{text:'Platz '+p.rank+': '+a.teams.find(team=>team.id===p.team_id)?.name+' – '+formatPoints(p.total_points)+' Punkte'}));
+    }
   }
 }
 async function openArchiveImport(archive) {

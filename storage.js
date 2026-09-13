@@ -44,7 +44,7 @@ function snapshot(label) {
   return name;
 }
 
-const CURRENT_SCHEMA_VERSION = 4;
+const CURRENT_SCHEMA_VERSION = 5;
 const SCHEMA = `
 CREATE TABLE shooters (
  id INTEGER PRIMARY KEY AUTOINCREMENT, uuid TEXT NOT NULL UNIQUE,
@@ -56,6 +56,9 @@ CREATE TABLE events (
  id INTEGER PRIMARY KEY AUTOINCREMENT, uuid TEXT NOT NULL UNIQUE, title TEXT NOT NULL DEFAULT '',
  year INTEGER CHECK(year BETWEEN 1900 AND 2200), status TEXT NOT NULL CHECK(status IN ('active','closed','correction')),
  revision INTEGER NOT NULL DEFAULT 0, ranking_version TEXT NOT NULL DEFAULT 'series-name-v1',
+ scoring_mode TEXT NOT NULL DEFAULT 'individual' CHECK(scoring_mode IN ('individual','team','both')),
+ team_max_members INTEGER NOT NULL DEFAULT 5 CHECK(team_max_members > 0),
+ team_counted_results INTEGER NOT NULL DEFAULT 3 CHECK(team_counted_results > 0 AND team_counted_results <= team_max_members),
  reconstructed INTEGER NOT NULL DEFAULT 0, correction_reason TEXT,
  created_at TEXT NOT NULL DEFAULT (datetime('now')), closed_at TEXT
 );
@@ -81,6 +84,29 @@ CREATE TABLE results (
  FOREIGN KEY(discipline_id,event_id) REFERENCES disciplines(id,event_id) ON DELETE CASCADE
 );
 CREATE INDEX results_participant_discipline ON results(participant_id,discipline_id);
+CREATE UNIQUE INDEX results_team_selection_key ON results(id,event_id,participant_id,discipline_id);
+CREATE TABLE teams (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, event_id INTEGER NOT NULL REFERENCES events(id),
+ name TEXT NOT NULL CHECK(length(trim(name)) BETWEEN 1 AND 200),
+ created_at TEXT NOT NULL DEFAULT (datetime('now')),
+ UNIQUE(event_id,name COLLATE NOCASE), UNIQUE(id,event_id)
+);
+CREATE TABLE team_memberships (
+ event_id INTEGER NOT NULL, team_id INTEGER NOT NULL, participant_id INTEGER NOT NULL,
+ created_at TEXT NOT NULL DEFAULT (datetime('now')),
+ FOREIGN KEY(team_id,event_id) REFERENCES teams(id,event_id) ON DELETE CASCADE,
+ FOREIGN KEY(participant_id,event_id) REFERENCES participants(id,event_id) ON DELETE CASCADE,
+ PRIMARY KEY(event_id,participant_id)
+);
+CREATE INDEX team_memberships_team ON team_memberships(team_id);
+CREATE TABLE team_result_selections (
+ event_id INTEGER NOT NULL, participant_id INTEGER NOT NULL, discipline_id INTEGER NOT NULL, result_id INTEGER NOT NULL,
+ created_at TEXT NOT NULL DEFAULT (datetime('now')),
+ FOREIGN KEY(participant_id,event_id) REFERENCES participants(id,event_id) ON DELETE CASCADE,
+ FOREIGN KEY(discipline_id,event_id) REFERENCES disciplines(id,event_id) ON DELETE CASCADE,
+ FOREIGN KEY(result_id,event_id,participant_id,discipline_id) REFERENCES results(id,event_id,participant_id,discipline_id) ON DELETE CASCADE,
+ PRIMARY KEY(event_id,participant_id,discipline_id)
+);
 CREATE TABLE placements (
  event_id INTEGER NOT NULL REFERENCES events(id), revision INTEGER NOT NULL,
  participant_id INTEGER NOT NULL, discipline_id INTEGER NOT NULL,
@@ -88,6 +114,14 @@ CREATE TABLE placements (
  FOREIGN KEY(participant_id,event_id) REFERENCES participants(id,event_id),
  FOREIGN KEY(discipline_id,event_id) REFERENCES disciplines(id,event_id),
  PRIMARY KEY(event_id,revision,participant_id,discipline_id)
+);
+CREATE TABLE team_placements (
+ event_id INTEGER NOT NULL REFERENCES events(id), revision INTEGER NOT NULL,
+ team_id INTEGER NOT NULL, discipline_id INTEGER NOT NULL,
+ rank INTEGER NOT NULL CHECK(rank > 0), total_points REAL NOT NULL, counted_results TEXT NOT NULL,
+ FOREIGN KEY(team_id,event_id) REFERENCES teams(id,event_id),
+ FOREIGN KEY(discipline_id,event_id) REFERENCES disciplines(id,event_id),
+ PRIMARY KEY(event_id,revision,team_id,discipline_id)
 );
 CREATE TABLE closures (
  event_id INTEGER NOT NULL REFERENCES events(id), revision INTEGER NOT NULL,
@@ -106,7 +140,7 @@ CREATE TABLE consent_log (
 CREATE TABLE imports (fingerprint TEXT PRIMARY KEY, event_id INTEGER NOT NULL REFERENCES events(id));
 CREATE TABLE person_aliases (uuid TEXT PRIMARY KEY, shooter_id INTEGER NOT NULL REFERENCES shooters(id));
 CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-PRAGMA user_version = 4;
+PRAGMA user_version = 5;
 `;
 
 const version = get('PRAGMA user_version').user_version;
@@ -166,6 +200,54 @@ if (version === 3) {
     db.exec("ALTER TABLE disciplines ADD COLUMN ranking_mode TEXT NOT NULL DEFAULT 'combined' CHECK(ranking_mode IN ('combined','separate')); PRAGMA user_version = 4;");
     checkDatabase(db);
   });
+}
+if (get('PRAGMA user_version').user_version === 4) {
+  if (version === 4) snapshot('vor-migration-v5');
+  const hasEvents = !!get("SELECT name FROM sqlite_master WHERE type='table' AND name='events'");
+  if (!hasEvents) {
+    db.exec('PRAGMA user_version = 5;');
+  } else {
+  transaction(() => {
+    db.exec(`
+      ALTER TABLE events ADD COLUMN scoring_mode TEXT NOT NULL DEFAULT 'individual' CHECK(scoring_mode IN ('individual','team','both'));
+      ALTER TABLE events ADD COLUMN team_max_members INTEGER NOT NULL DEFAULT 5 CHECK(team_max_members > 0);
+      ALTER TABLE events ADD COLUMN team_counted_results INTEGER NOT NULL DEFAULT 3 CHECK(team_counted_results > 0 AND team_counted_results <= team_max_members);
+      CREATE UNIQUE INDEX results_team_selection_key ON results(id,event_id,participant_id,discipline_id);
+      CREATE TABLE teams (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, event_id INTEGER NOT NULL REFERENCES events(id),
+        name TEXT NOT NULL CHECK(length(trim(name)) BETWEEN 1 AND 200),
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(event_id,name COLLATE NOCASE), UNIQUE(id,event_id)
+      );
+      CREATE TABLE team_memberships (
+        event_id INTEGER NOT NULL, team_id INTEGER NOT NULL, participant_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        FOREIGN KEY(team_id,event_id) REFERENCES teams(id,event_id) ON DELETE CASCADE,
+        FOREIGN KEY(participant_id,event_id) REFERENCES participants(id,event_id) ON DELETE CASCADE,
+        PRIMARY KEY(event_id,participant_id)
+      );
+      CREATE INDEX team_memberships_team ON team_memberships(team_id);
+      CREATE TABLE team_result_selections (
+        event_id INTEGER NOT NULL, participant_id INTEGER NOT NULL, discipline_id INTEGER NOT NULL, result_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        FOREIGN KEY(participant_id,event_id) REFERENCES participants(id,event_id) ON DELETE CASCADE,
+        FOREIGN KEY(discipline_id,event_id) REFERENCES disciplines(id,event_id) ON DELETE CASCADE,
+        FOREIGN KEY(result_id,event_id,participant_id,discipline_id) REFERENCES results(id,event_id,participant_id,discipline_id) ON DELETE CASCADE,
+        PRIMARY KEY(event_id,participant_id,discipline_id)
+      );
+      CREATE TABLE team_placements (
+        event_id INTEGER NOT NULL REFERENCES events(id), revision INTEGER NOT NULL,
+        team_id INTEGER NOT NULL, discipline_id INTEGER NOT NULL,
+        rank INTEGER NOT NULL CHECK(rank > 0), total_points REAL NOT NULL, counted_results TEXT NOT NULL,
+        FOREIGN KEY(team_id,event_id) REFERENCES teams(id,event_id),
+        FOREIGN KEY(discipline_id,event_id) REFERENCES disciplines(id,event_id),
+        PRIMARY KEY(event_id,revision,team_id,discipline_id)
+      );
+      PRAGMA user_version = 5;
+    `);
+    checkDatabase(db);
+  });
+  }
 }
 
 const setting = key => get('SELECT value FROM settings WHERE key=?', [key])?.value;

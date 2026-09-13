@@ -90,7 +90,7 @@ before(async () => {
 });
 
 beforeEach(async () => {
-  db.exec("DELETE FROM person_aliases; DELETE FROM consent_log; DELETE FROM contacts; DELETE FROM imports; DELETE FROM placements; DELETE FROM closures; DELETE FROM results; DELETE FROM disciplines; DELETE FROM participants; DELETE FROM events; DELETE FROM shooters;");
+  db.exec("DELETE FROM person_aliases; DELETE FROM consent_log; DELETE FROM contacts; DELETE FROM imports; DELETE FROM team_placements; DELETE FROM placements; DELETE FROM closures; DELETE FROM team_result_selections; DELETE FROM team_memberships; DELETE FROM teams; DELETE FROM results; DELETE FROM disciplines; DELETE FROM participants; DELETE FROM events; DELETE FROM shooters;");
   db.prepare("INSERT INTO events(uuid,title,year,status) VALUES (?,'',2026,'active')").run(randomUUID());
   db.prepare("DELETE FROM settings WHERE key='privacy_review'").run();
   await api('/api/auth/login',{method:'POST',json:{password:'test-password-12345'}});
@@ -412,6 +412,25 @@ test('API-CRUD liefert gespeicherte Änderungen und aktualisierte Ranglisten', a
   assert.deepEqual(Shooters.list(), []);
 });
 
+test('Mannschafts-API speichert Einstellungen, Zuordnungen und die gewählte Runde', async () => {
+  let response=await api('/api/team-settings',{method:'PUT',json:{scoring_mode:'both',team_max_members:5,team_counted_results:2}});
+  assert.equal(response.response.status,200);
+  const first=Shooters.create({name:'Team Eins',gender:'m'}),second=Shooters.create({name:'Team Zwei',gender:'w'});
+  const discipline=Disciplines.create({name:'Mannschaftsdisziplin'});
+  response=await api('/api/teams',{method:'POST',json:{name:'Adler'}});
+  const team=response.body;
+  assert.equal(response.response.status,201);
+  await api(`/api/teams/${team.id}/members/${first.id}`,{method:'PUT',json:{}});
+  await api(`/api/teams/${team.id}/members/${second.id}`,{method:'PUT',json:{}});
+  const firstResult=Results.create({shooter_id:first.id,discipline_id:discipline.id,round_number:1,points:90});
+  const secondResult=Results.create({shooter_id:second.id,discipline_id:discipline.id,round_number:1,points:80});
+  await api(`/api/results/${firstResult.id}/team-selection`,{method:'PUT',json:{selected:true}});
+  await api(`/api/results/${secondResult.id}/team-selection`,{method:'PUT',json:{selected:true}});
+  response=await api(`/api/team-rankings/${discipline.id}`);
+  assert.deepEqual(response.body.map(row=>[row.name,row.total_points,row.counted_count]),[['Adler',170,2]]);
+  assert.equal((await api('/api/teams')).body[0].members.length,2);
+});
+
 test('Saisontitel wird über die API gelesen, getrimmt und begrenzt', async () => {
   let result = await api('/api/season', { method: 'PUT', json: { title: '  Pokalschießen  ' } });
   assert.equal(result.response.status, 200);
@@ -610,7 +629,7 @@ test('Abschlusskorrektur erfordert Begründung und erzeugt eine neue Wertungsver
   assert.equal(db.prepare('SELECT best_points FROM placements WHERE event_id=? AND revision=1').get(previous).best_points,80);
 
   const archive=fullExport(previous);
-  assert.equal(archive.version,4);
+  assert.equal(archive.version,5);
   assert.deepEqual([...new Set(archive.placement_history.map(p=>p.revision))],[1,2]);
   assert.deepEqual(archive.closures.map(c=>c.revision),[1,2]);
   archive.event.uuid='99999999-9999-4999-8999-999999999999';

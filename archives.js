@@ -10,21 +10,35 @@ function fullExport(eventId=Events.active().id) {
   const placementHistory=all(`SELECT f.revision,p.shooter_id,f.discipline_id,f.rank,f.best_points,f.rounds
     FROM placements f JOIN participants p ON p.id=f.participant_id WHERE f.event_id=? ORDER BY f.revision,f.discipline_id,f.rank`,[eventId])
     .map(({rounds,...row})=>({...row,all_rounds:JSON.parse(rounds)}));
-  return {format:'schuetzen-event',version:4,event_title:event.title,event,exported_at:new Date().toISOString(),
+  const teamPlacementHistory=all(`SELECT f.revision,f.team_id,f.discipline_id,f.rank,f.total_points,f.counted_results
+    FROM team_placements f WHERE f.event_id=? ORDER BY f.revision,f.discipline_id,f.rank,f.team_id`,[eventId]).map(({counted_results,...row})=>{
+      const snapshot=JSON.parse(counted_results);
+      return {...row,...(Array.isArray(snapshot) ? {entries:snapshot} : snapshot)};
+    });
+  const teams=all('SELECT id,name,created_at FROM teams WHERE event_id=? ORDER BY name COLLATE NOCASE,id',[eventId]).map(team=>({
+    ...team,members:all(`SELECT p.shooter_id FROM team_memberships m JOIN participants p ON p.id=m.participant_id
+      WHERE m.team_id=? ORDER BY p.shooter_id`,[team.id]).map(row=>row.shooter_id)
+  }));
+  return {format:'schuetzen-event',version:5,event_title:event.title,event,exported_at:new Date().toISOString(),
     shooters:Shooters.list(eventId).map(({id,uuid,name,gender,start_number,created_at})=>({id,uuid,name,gender,start_number,created_at})),
     disciplines:Disciplines.list(eventId),
     results:all('SELECT r.id,p.shooter_id,r.discipline_id,r.round_number,r.points,r.created_at FROM results r JOIN participants p ON p.id=r.participant_id WHERE r.event_id=?',[eventId]),
+    teams,
+    team_selections:all(`SELECT p.shooter_id,s.discipline_id,s.result_id FROM team_result_selections s
+      JOIN participants p ON p.id=s.participant_id WHERE s.event_id=? ORDER BY p.shooter_id,s.discipline_id`,[eventId]),
     placements:event.status==='closed' ? placementHistory.filter(p=>p.revision===event.revision).map(({revision,...p})=>p) : [],
     placement_history:placementHistory,
+    team_placements:event.status==='closed' ? teamPlacementHistory.filter(p=>p.revision===event.revision).map(({revision,...p})=>p) : [],
+    team_placement_history:teamPlacementHistory,
     closures:all('SELECT revision,reason,created_at FROM closures WHERE event_id=? ORDER BY revision',[eventId])};
 }
 function validateSeasonArchive(data) {
   let clean;
   try { clean=legacyValidate(data); }
   catch(error) { if(!Number.isInteger(error.status)) error.status=400; throw error; }
-  if(data.version!==undefined && (![2,3,4].includes(data.version) || data.format!=='schuetzen-event')) fail('Unbekannte Archivversion');
+  if(data.version!==undefined && (![2,3,4,5].includes(data.version) || data.format!=='schuetzen-event')) fail('Unbekannte Archivversion');
   clean.archive_version=data.version || 1;
-  if([2,3,4].includes(data.version)) {
+  if([2,3,4,5].includes(data.version)) {
     const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if(!data.event || !uuid.test(data.event.uuid) || !['active','closed','correction'].includes(data.event.status) || data.event.ranking_version!=='series-name-v1') fail('Ungültige Event-Metadaten oder unbekannte Wertung');
     if(data.event.year!==null && (!Number.isInteger(data.event.year) || data.event.year<1900 || data.event.year>2200)) fail('Eventjahr ist ungültig');
@@ -32,7 +46,12 @@ function validateSeasonArchive(data) {
     if(![0,1].includes(data.event.reconstructed)) fail('Rekonstruktionskennzeichen ist ungültig');
     const uuids=new Set();
     clean.shooters.forEach((s,i)=>{const value=data.shooters[i].uuid;if(!uuid.test(value)||uuids.has(value)) fail('Ungültige oder doppelte Personen-UUID');s.uuid=value;uuids.add(value);});
-    clean.event={uuid:data.event.uuid,year:data.event.year,status:data.event.status,revision:data.event.revision,ranking_version:data.event.ranking_version,reconstructed:data.event.reconstructed};
+    const scoringMode=data.version>=5 ? data.event.scoring_mode : 'individual';
+    const teamMaxMembers=data.version>=5 ? data.event.team_max_members : 5;
+    const teamCountedResults=data.version>=5 ? data.event.team_counted_results : 3;
+    if(!['individual','team','both'].includes(scoringMode) || !Number.isSafeInteger(teamMaxMembers) || teamMaxMembers<1 || !Number.isSafeInteger(teamCountedResults) || teamCountedResults<1 || teamCountedResults>teamMaxMembers) fail('Mannschaftswertungs-Einstellungen sind ungültig');
+    clean.event={uuid:data.event.uuid,year:data.event.year,status:data.event.status,revision:data.event.revision,ranking_version:data.event.ranking_version,reconstructed:data.event.reconstructed,
+      scoring_mode:scoringMode,team_max_members:teamMaxMembers,team_counted_results:teamCountedResults};
     if(!Array.isArray(data.placements)) fail('Abschlusswertung fehlt');
     clean.placements=data.placements.map(p=>{
       if(!clean.shooters.some(s=>s.id===p.shooter_id)||!clean.disciplines.some(d=>d.id===p.discipline_id)||!Number.isSafeInteger(p.rank)||p.rank<1||!Number.isFinite(p.best_points)||!Array.isArray(p.all_rounds)||!p.all_rounds.length||p.all_rounds.some(v=>typeof v!=='number'||!Number.isFinite(v))) fail('Abschlussplatzierung ist ungültig');
@@ -113,6 +132,51 @@ function validateSeasonArchive(data) {
         if(JSON.stringify(canonical(clean.placements))!==JSON.stringify(canonical(clean.placement_history.filter(p=>p.revision===clean.event.revision)))) fail('Letzte Abschlusswertung widerspricht der Versionshistorie');
       }
     }
+    if(data.version>=5) {
+      if(!Array.isArray(data.teams)||!Array.isArray(data.team_selections)||!Array.isArray(data.team_placements)||!Array.isArray(data.team_placement_history)) fail('Mannschaftsdaten fehlen');
+      const teamIds=new Set(),teamNames=new Set(),assignedShooters=new Set();
+      clean.teams=data.teams.map((team,index)=>{
+        if(!team || !Number.isSafeInteger(team.id) || team.id<1 || teamIds.has(team.id)) fail(`Mannschaft ${index+1}: ID ist ungültig oder doppelt`);
+        const name=typeof team.name==='string' ? team.name.trim() : '';
+        const normalized=name.toLocaleLowerCase('de');
+        if(!name || name.length>200 || teamNames.has(normalized) || !Array.isArray(team.members) || team.members.length>teamMaxMembers) fail(`Mannschaft ${index+1} ist ungültig`);
+        for(const shooterId of team.members) {
+          if(!clean.shooters.some(shooter=>shooter.id===shooterId) || assignedShooters.has(shooterId)) fail('Ein Schütze ist keiner oder mehreren gültigen Mannschaften zugeordnet');
+          assignedShooters.add(shooterId);
+        }
+        teamIds.add(team.id);teamNames.add(normalized);
+        return {id:team.id,name,members:[...team.members],created_at:team.created_at};
+      });
+      const selectionKeys=new Set();
+      clean.team_selections=data.team_selections.map(selection=>{
+        const result=clean.results.find(row=>row.id===selection.result_id);
+        const key=selection.shooter_id+':'+selection.discipline_id;
+        if(selectionKeys.has(key)||!assignedShooters.has(selection.shooter_id)||!result||result.shooter_id!==selection.shooter_id||result.discipline_id!==selection.discipline_id) fail('Auswahl für die Mannschaftswertung ist ungültig');
+        selectionKeys.add(key);
+        return {shooter_id:selection.shooter_id,discipline_id:selection.discipline_id,result_id:selection.result_id};
+      });
+      const validateTeamPlacements=(rows,historical)=>rows.map(row=>{
+        if(!teamIds.has(row.team_id)||!clean.disciplines.some(d=>d.id===row.discipline_id)||!Number.isSafeInteger(row.rank)||row.rank<1||!Number.isFinite(row.total_points)||!Array.isArray(row.entries)) fail('Mannschaftsplatzierung ist ungültig');
+        if(historical && (!Number.isSafeInteger(row.revision)||row.revision<1||row.revision>clean.event.revision)) fail('Historische Mannschaftsplatzierung ist ungültig');
+        const entries=row.entries.map(entry=>{
+          if(!clean.shooters.some(s=>s.id===entry.shooter_id)||!Number.isFinite(entry.points)||typeof entry.counted!=='boolean') fail('Gewertetes Mannschaftsergebnis ist ungültig');
+          return {result_id:entry.result_id,shooter_id:entry.shooter_id,name:String(entry.name||''),start_number:entry.start_number,round_number:entry.round_number,points:entry.points,counted:entry.counted};
+        });
+        const requiredCount=Number.isSafeInteger(row.required_count) && row.required_count>0 ? row.required_count : teamCountedResults;
+        const counted=entries.filter(entry=>entry.counted);
+        if(counted.length>requiredCount || counted.reduce((sum,entry)=>sum+entry.points,0)!==row.total_points) fail('Mannschaftspunktzahl widerspricht den gewerteten Ergebnissen');
+        return {...(historical ? {revision:row.revision} : {}),team_id:row.team_id,discipline_id:row.discipline_id,rank:row.rank,total_points:row.total_points,
+          entries,member_count:Number.isSafeInteger(row.member_count)?row.member_count:entries.length,required_count:requiredCount};
+      });
+      clean.team_placements=validateTeamPlacements(data.team_placements,false);
+      clean.team_placement_history=validateTeamPlacements(data.team_placement_history,true);
+      if(clean.event.status==='closed') {
+        const current=clean.team_placement_history.filter(row=>row.revision===clean.event.revision);
+        if(JSON.stringify(clean.team_placements)!==JSON.stringify(current.map(({revision,...row})=>row))) fail('Letzte Mannschaftswertung widerspricht der Versionshistorie');
+      } else if(clean.team_placements.length) fail('Ein noch nicht abgeschlossenes Event darf keine Mannschaftsplatzierung enthalten');
+    } else {
+      clean.teams=[];clean.team_selections=[];clean.team_placements=[];clean.team_placement_history=[];
+    }
   }
   return clean;
 }
@@ -151,24 +215,38 @@ function restoreSeasonArchive(data,{year,mapping={},fingerprint:expected}={}) {
   const backup=require('./backups').create('vor-eventimport');
   const eventId=transaction(()=>{
     const preserveHistory=a.archive_version>=3 && ['closed','correction'].includes(a.event?.status);
-    const id=Number(run("INSERT INTO events(uuid,title,year,status,reconstructed) VALUES (?,?,?,'correction',?)",[a.event?.uuid||randomUUID(),a.event_title,y,preserveHistory&&a.event.status==='closed' ? a.event.reconstructed : 1]).lastInsertRowid);
-    const participants=new Map(),disciplines=new Map();
+    const id=Number(run("INSERT INTO events(uuid,title,year,status,reconstructed,scoring_mode,team_max_members,team_counted_results) VALUES (?,?,?,'correction',?,?,?,?)",
+      [a.event?.uuid||randomUUID(),a.event_title,y,preserveHistory&&a.event.status==='closed' ? a.event.reconstructed : 1,a.event?.scoring_mode||'individual',a.event?.team_max_members||5,a.event?.team_counted_results||3]).lastInsertRowid);
+    const participants=new Map(),people=new Map(),disciplines=new Map(),results=new Map(),teams=new Map();
     for(const s of a.shooters) {
       let personId=mapping[s.id];
       if(personId===null) personId=Number(run('INSERT INTO shooters(uuid,name,gender) VALUES (?,?,?)',[s.uuid||randomUUID(),s.name,s.gender]).lastInsertRowid);
       if(s.uuid && People.get(personId).uuid!==s.uuid) run('INSERT INTO person_aliases(uuid,shooter_id) VALUES (?,?) ON CONFLICT(uuid) DO NOTHING',[s.uuid,personId]);
+      people.set(s.id,personId);
       participants.set(s.id,Number(run('INSERT INTO participants(event_id,shooter_id,start_number,name,gender,created_at) VALUES (?,?,?,?,?,?)',[id,personId,s.start_number,s.name,s.gender,s.created_at]).lastInsertRowid));
     }
     for(const d of a.disciplines) disciplines.set(d.id,Number(run('INSERT INTO disciplines(event_id,name,ranking_mode,sort_order,created_at) VALUES (?,?,?,?,?)',[id,d.name,d.ranking_mode,d.sort_order,d.created_at]).lastInsertRowid));
-    for(const r of a.results) run('INSERT INTO results(event_id,participant_id,discipline_id,round_number,points,created_at) VALUES (?,?,?,?,?,?)',[id,participants.get(r.shooter_id),disciplines.get(r.discipline_id),r.round_number,r.points,r.created_at]);
+    for(const r of a.results) results.set(r.id,Number(run('INSERT INTO results(event_id,participant_id,discipline_id,round_number,points,created_at) VALUES (?,?,?,?,?,?)',[id,participants.get(r.shooter_id),disciplines.get(r.discipline_id),r.round_number,r.points,r.created_at]).lastInsertRowid));
+    for(const team of a.teams || []) {
+      const teamId=Number(run('INSERT INTO teams(event_id,name,created_at) VALUES (?,?,?)',[id,team.name,team.created_at]).lastInsertRowid);
+      teams.set(team.id,teamId);
+      for(const shooterId of team.members) run('INSERT INTO team_memberships(event_id,team_id,participant_id) VALUES (?,?,?)',[id,teamId,participants.get(shooterId)]);
+    }
+    for(const selection of a.team_selections || []) run('INSERT INTO team_result_selections(event_id,participant_id,discipline_id,result_id) VALUES (?,?,?,?)',
+      [id,participants.get(selection.shooter_id),disciplines.get(selection.discipline_id),results.get(selection.result_id)]);
+    const teamSnapshot=row=>JSON.stringify({entries:row.entries.map(entry=>({...entry,result_id:results.get(entry.result_id),shooter_id:people.get(entry.shooter_id),participant_id:participants.get(entry.shooter_id)})),member_count:row.member_count,required_count:row.required_count});
     if(preserveHistory) {
       for(const row of a.placement_history) run('INSERT INTO placements(event_id,revision,participant_id,discipline_id,rank,best_points,rounds) VALUES (?,?,?,?,?,?,?)',[id,row.revision,participants.get(row.shooter_id),disciplines.get(row.discipline_id),row.rank,row.best_points,JSON.stringify(row.all_rounds)]);
+      for(const row of a.team_placement_history || []) run('INSERT INTO team_placements(event_id,revision,team_id,discipline_id,rank,total_points,counted_results) VALUES (?,?,?,?,?,?,?)',
+        [id,row.revision,teams.get(row.team_id),disciplines.get(row.discipline_id),row.rank,row.total_points,teamSnapshot(row)]);
       for(const closure of a.closures) run('INSERT INTO closures(event_id,revision,reason,created_at) VALUES (?,?,?,?)',[id,closure.revision,closure.reason,closure.created_at]);
       run('UPDATE events SET revision=? WHERE id=?',[a.event.revision,id]);
       if(a.event.status==='closed') run("UPDATE events SET status='closed',closed_at=datetime('now') WHERE id=?",[id]);
       else Events.close(id,'Aus Archiv rekonstruierter Abschluss des Korrekturstands');
     } else if(a.event?.status==='closed') {
       for(const row of a.placements) run('INSERT INTO placements(event_id,revision,participant_id,discipline_id,rank,best_points,rounds) VALUES (?,1,?,?,?,?,?)',[id,participants.get(row.shooter_id),disciplines.get(row.discipline_id),row.rank,row.best_points,JSON.stringify(row.all_rounds)]);
+      for(const row of a.team_placements || []) run('INSERT INTO team_placements(event_id,revision,team_id,discipline_id,rank,total_points,counted_results) VALUES (?,1,?,?,?,?,?)',
+        [id,teams.get(row.team_id),disciplines.get(row.discipline_id),row.rank,row.total_points,teamSnapshot(row)]);
       run("INSERT INTO closures(event_id,revision,reason) VALUES (?,1,'Aus älterem Archiv rekonstruierte Abschlusswertung')",[id]);
       run("UPDATE events SET revision=1,status='closed',reconstructed=1,closed_at=datetime('now') WHERE id=?",[id]);
     } else Events.close(id,'Aus Archiv rekonstruierte Wertung');

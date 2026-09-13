@@ -23,6 +23,19 @@ const Events = {
     run('UPDATE events SET title=?,year=? WHERE id=?',[title,year,id]);
     return this.get(id);
   },
+  teamSettings(id, data) {
+    const event=this.writable(id);
+    const scoringMode=data.scoring_mode === undefined ? event.scoring_mode : data.scoring_mode;
+    const maxMembers=data.team_max_members === undefined ? event.team_max_members : Number(data.team_max_members);
+    const countedResults=data.team_counted_results === undefined ? event.team_counted_results : Number(data.team_counted_results);
+    if(!['individual','team','both'].includes(scoringMode)) fail('Wertungsmodus ist ungültig');
+    if(!Number.isSafeInteger(maxMembers) || maxMembers<1 || maxMembers>100) fail('Die Mannschaftsgröße muss zwischen 1 und 100 liegen');
+    if(!Number.isSafeInteger(countedResults) || countedResults<1 || countedResults>maxMembers) fail('Die Zahl der gewerteten Ergebnisse muss zwischen 1 und der Mannschaftsgröße liegen');
+    const largest=get(`SELECT COUNT(*) AS n FROM team_memberships WHERE event_id=? GROUP BY team_id ORDER BY n DESC LIMIT 1`,[id])?.n || 0;
+    if(largest>maxMembers) fail(`Mindestens eine Mannschaft hat bereits ${largest} Mitglieder`,409);
+    run('UPDATE events SET scoring_mode=?,team_max_members=?,team_counted_results=? WHERE id=?',[scoringMode,maxMembers,countedResults,id]);
+    return this.get(id);
+  },
   close(id, reason='Eventabschluss') {
     const e=this.writable(id);
     if(!e.year) fail('Bitte zuerst das Veranstaltungsjahr festlegen');
@@ -31,6 +44,12 @@ const Events = {
       for(const row of rankingForDiscipline(d.id, true)) {
         run('INSERT INTO placements(event_id,revision,participant_id,discipline_id,rank,best_points,rounds) VALUES (?,?,?,?,?,?,?)',
           [id,revision,row.participant_id,d.id,row.rank,row.best_points,JSON.stringify(row.all_rounds)]);
+      }
+      if(e.scoring_mode!=='individual') {
+        for(const row of teamRankingForDiscipline(d.id, true)) {
+          run('INSERT INTO team_placements(event_id,revision,team_id,discipline_id,rank,total_points,counted_results) VALUES (?,?,?,?,?,?,?)',
+            [id,revision,row.team_id,d.id,row.rank,row.total_points,JSON.stringify({entries:row.entries,member_count:row.member_count,required_count:row.required_count})]);
+        }
       }
     }
     run('INSERT INTO closures(event_id,revision,reason) VALUES (?,?,?)',[id,revision,reason]);
@@ -180,7 +199,68 @@ const Disciplines = {
   },
   remove(id) { if(!this.findById(id)) fail('Disziplin nicht gefunden',404); run('DELETE FROM disciplines WHERE id=?',[id]); }
 };
-const resultSelect='SELECT r.*,p.shooter_id FROM results r JOIN participants p ON p.id=r.participant_id';
+const Teams = {
+  list(eventId=current()) {
+    return all(`SELECT t.*,COUNT(m.participant_id) AS member_count
+      FROM teams t LEFT JOIN team_memberships m ON m.team_id=t.id
+      WHERE t.event_id=? GROUP BY t.id ORDER BY t.name COLLATE NOCASE,t.id`,[eventId]).map(team=>({
+        ...team,
+        members:all(`SELECT p.shooter_id,p.id AS participant_id,p.start_number,p.name,p.gender
+          FROM team_memberships m JOIN participants p ON p.id=m.participant_id
+          WHERE m.team_id=? ORDER BY p.name COLLATE NOCASE,p.id`,[team.id])
+      }));
+  },
+  findById(id, eventId=current()) { return get('SELECT * FROM teams WHERE id=? AND event_id=?',[id,eventId]); },
+  create({name}) {
+    Events.writable(current());
+    name=String(name || '').trim();
+    if(!name || name.length>200) fail('Mannschaftsname ist ungültig');
+    if(get('SELECT id FROM teams WHERE event_id=? AND name=? COLLATE NOCASE',[current(),name])) fail('Mannschaft existiert bereits',409);
+    const id=Number(run('INSERT INTO teams(event_id,name) VALUES (?,?)',[current(),name]).lastInsertRowid);
+    return this.findById(id);
+  },
+  update(id,{name}) {
+    Events.writable(current());
+    if(!this.findById(id)) fail('Mannschaft nicht gefunden',404);
+    name=String(name || '').trim();
+    if(!name || name.length>200) fail('Mannschaftsname ist ungültig');
+    const duplicate=get('SELECT id FROM teams WHERE event_id=? AND name=? COLLATE NOCASE',[current(),name]);
+    if(duplicate && duplicate.id!==id) fail('Mannschaft existiert bereits',409);
+    run('UPDATE teams SET name=? WHERE id=?',[name,id]);
+    return this.findById(id);
+  },
+  remove(id) {
+    Events.writable(current());
+    if(!this.findById(id)) fail('Mannschaft nicht gefunden',404);
+    run('DELETE FROM teams WHERE id=?',[id]);
+  },
+  assign(teamId, shooterId) {
+    const event=Events.writable(current());
+    const team=this.findById(teamId);
+    const shooter=Shooters.findById(shooterId);
+    if(!team || !shooter) fail('Mannschaft oder Teilnehmer gehört nicht zum aktiven Event');
+    const existing=get('SELECT team_id FROM team_memberships WHERE event_id=? AND participant_id=?',[current(),shooter.participant_id]);
+    if(existing?.team_id===teamId) return team;
+    const count=get('SELECT COUNT(*) AS n FROM team_memberships WHERE team_id=?',[teamId]).n;
+    if(count>=event.team_max_members) fail(`Diese Mannschaft hat bereits ${event.team_max_members} Mitglieder`,409);
+    run(`INSERT INTO team_memberships(event_id,team_id,participant_id) VALUES (?,?,?)
+      ON CONFLICT(event_id,participant_id) DO UPDATE SET team_id=excluded.team_id,created_at=datetime('now')`,[current(),teamId,shooter.participant_id]);
+    return team;
+  },
+  unassign(shooterId) {
+    Events.writable(current());
+    const shooter=Shooters.findById(shooterId);
+    if(!shooter) fail('Teilnehmer nicht gefunden',404);
+    run('DELETE FROM team_memberships WHERE event_id=? AND participant_id=?',[current(),shooter.participant_id]);
+  },
+  membershipForShooter(shooterId) {
+    return get(`SELECT t.id,t.name FROM team_memberships m JOIN teams t ON t.id=m.team_id
+      JOIN participants p ON p.id=m.participant_id WHERE p.shooter_id=? AND m.event_id=?`,[shooterId,current()]);
+  }
+};
+const resultSelect=`SELECT r.*,p.shooter_id,
+  EXISTS(SELECT 1 FROM team_result_selections ts WHERE ts.result_id=r.id) AS team_selected
+  FROM results r JOIN participants p ON p.id=r.participant_id`;
 const Results = {
   listForShooterDiscipline(id,disciplineId) { return all(resultSelect+' WHERE p.shooter_id=? AND r.discipline_id=? AND r.event_id=? ORDER BY r.round_number,r.id',[id,disciplineId,current()]); },
   findById(id) { return get(resultSelect+' WHERE r.id=? AND r.event_id=?',[id,current()]); },
@@ -203,6 +283,21 @@ const Results = {
     if(typeof points!=='number' || !Number.isFinite(points)) fail('Punkte sind ungültig');
     if(!get('SELECT id FROM results WHERE id=? AND event_id=?',[id,eventId])) fail('Ergebnis nicht gefunden',404);
     run('UPDATE results SET points=? WHERE id=?',[points,id]);
+  },
+  selectForTeam(id, selected=true) {
+    Events.writable(current());
+    const result=this.findById(id);
+    if(!result) fail('Ergebnis nicht gefunden',404);
+    if(selected) {
+      if(!get('SELECT 1 FROM team_memberships WHERE event_id=? AND participant_id=?',[current(),result.participant_id])) fail('Teilnehmer zuerst einer Mannschaft zuordnen',409);
+      run(`INSERT INTO team_result_selections(event_id,participant_id,discipline_id,result_id) VALUES (?,?,?,?)
+        ON CONFLICT(event_id,participant_id,discipline_id) DO UPDATE SET result_id=excluded.result_id,created_at=datetime('now')`,
+        [current(),result.participant_id,result.discipline_id,id]);
+    } else {
+      run('DELETE FROM team_result_selections WHERE event_id=? AND participant_id=? AND discipline_id=? AND result_id=?',
+        [current(),result.participant_id,result.discipline_id,id]);
+    }
+    return this.findById(id);
   }
 };
 function rankingForDiscipline(id, calculate=false) {
@@ -234,14 +329,72 @@ function rankingForDiscipline(id, calculate=false) {
     return {...r,ranking_group,rank:ranks[ranking_group],best_points:r.all_rounds[0]};
   });
 }
+function teamRankingForDiscipline(id, calculate=false) {
+  const discipline=get('SELECT * FROM disciplines WHERE id=?',[id]);
+  if(!discipline) return [];
+  const event=Events.get(discipline.event_id);
+  if(event.scoring_mode==='individual') return [];
+  if(event.status==='closed' && !calculate) {
+    return all(`SELECT f.rank,f.team_id,t.name,f.total_points,f.counted_results
+      FROM team_placements f JOIN teams t ON t.id=f.team_id
+      WHERE f.discipline_id=? AND f.revision=? ORDER BY f.rank,t.name COLLATE NOCASE`,[id,event.revision]).map(row=>{
+        const snapshot=JSON.parse(row.counted_results);
+        const entries=Array.isArray(snapshot) ? snapshot : snapshot.entries;
+        return {...row,entries,member_count:snapshot.member_count ?? entries.length,required_count:snapshot.required_count ?? event.team_counted_results,
+          selected_count:entries.length,counted_count:entries.filter(entry=>entry.counted).length};
+      });
+  }
+  const rows=all(`SELECT t.id AS team_id,t.name,p.shooter_id,p.id AS participant_id,p.name AS shooter_name,p.start_number,
+      r.id AS result_id,r.round_number,r.points
+    FROM teams t
+    LEFT JOIN team_memberships m ON m.team_id=t.id
+    LEFT JOIN participants p ON p.id=m.participant_id
+    LEFT JOIN team_result_selections s ON s.participant_id=p.id AND s.discipline_id=?
+    LEFT JOIN results r ON r.id=s.result_id
+    WHERE t.event_id=? ORDER BY t.name COLLATE NOCASE,p.name COLLATE NOCASE`,[id,event.id]);
+  const teams=new Map();
+  for(const row of rows) {
+    if(!teams.has(row.team_id)) teams.set(row.team_id,{team_id:row.team_id,name:row.name,member_count:0,required_count:event.team_counted_results,entries:[]});
+    const team=teams.get(row.team_id);
+    if(row.participant_id) team.member_count++;
+    if(row.result_id) team.entries.push({result_id:row.result_id,participant_id:row.participant_id,shooter_id:row.shooter_id,
+      name:row.shooter_name,start_number:row.start_number,round_number:row.round_number,points:row.points});
+  }
+  const ranked=[...teams.values()].filter(team=>team.entries.length);
+  for(const team of ranked) {
+    team.entries.sort((a,b)=>b.points-a.points || a.name.localeCompare(b.name,'de') || a.participant_id-b.participant_id);
+    team.entries=team.entries.map((entry,index)=>({...entry,counted:index<event.team_counted_results}));
+    team.selected_count=team.entries.length;
+    team.counted_count=Math.min(team.entries.length,event.team_counted_results);
+    team.total_points=team.entries.slice(0,event.team_counted_results).reduce((sum,entry)=>sum+entry.points,0);
+  }
+  ranked.sort((a,b)=>b.total_points-a.total_points || comparePointSeries(a.entries.filter(e=>e.counted).map(e=>e.points),b.entries.filter(e=>e.counted).map(e=>e.points)) || a.name.localeCompare(b.name,'de') || a.team_id-b.team_id);
+  let previousKey=null,rank=0;
+  ranked.forEach((team,index)=>{
+    const key=JSON.stringify([team.total_points,team.entries.filter(entry=>entry.counted).map(entry=>entry.points)]);
+    if(key!==previousKey) rank=index+1;
+    team.rank=rank;
+    previousKey=key;
+  });
+  return ranked;
+}
+function comparePointSeries(a,b) {
+  for(let i=0;i<Math.max(a.length,b.length);i++) {
+    if(a[i]===undefined) return 1;
+    if(b[i]===undefined) return -1;
+    if(a[i]!==b[i]) return b[i]-a[i];
+  }
+  return 0;
+}
 function dashboardSnapshot() {
-  const disciplines=Disciplines.list().map(d=>({...d,ranking:rankingForDiscipline(d.id)}));
-  return {event_title:Season.getTitle(),updated_at:new Date().toISOString(),
+  const event=Events.active();
+  const disciplines=Disciplines.list().map(d=>({...d,ranking:rankingForDiscipline(d.id),team_ranking:teamRankingForDiscipline(d.id)}));
+  return {event_title:Season.getTitle(),scoring_mode:event.scoring_mode,updated_at:new Date().toISOString(),
     stats:{shooters:Shooters.list().length,disciplines:disciplines.length,results:get('SELECT COUNT(*) AS n FROM results WHERE event_id=?',[current()]).n},
     disciplines, latest_results:all(`SELECT r.id,r.points,r.round_number,r.created_at,p.name AS shooter_name,p.start_number,d.id AS discipline_id,d.name AS discipline_name
       FROM results r JOIN participants p ON p.id=r.participant_id JOIN disciplines d ON d.id=r.discipline_id WHERE r.event_id=? ORDER BY r.id DESC LIMIT 10`,[current()])};
 }
-module.exports = { ...store, Events, People, Shooters, Disciplines, Results, Season, rankingForDiscipline, dashboardSnapshot, fail, person,
+module.exports = { ...store, Events, People, Shooters, Disciplines, Teams, Results, Season, rankingForDiscipline, teamRankingForDiscipline, dashboardSnapshot, fail, person,
   fullExport:(...args)=>require('./archives').fullExport(...args),
   archiveCurrentSeason:(...args)=>require('./archives').archiveCurrentSeason(...args),
   validateSeasonArchive:(...args)=>require('./archives').validateSeasonArchive(...args),

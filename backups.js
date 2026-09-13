@@ -5,7 +5,7 @@ const {DatabaseSync}=require('node:sqlite');
 const {createHash,randomUUID}=require('node:crypto');
 const S=require('./storage');
 const {db,all,get,run,transaction,snapshot,checkDatabase,atomicWrite,setting,setSetting,BACKUP_DIR}=S;
-const TABLES=['shooters','events','participants','disciplines','results','placements','closures','contacts','consent_log','imports','person_aliases','settings'];
+const TABLES=['shooters','events','participants','disciplines','results','teams','team_memberships','team_result_selections','placements','team_placements','closures','contacts','consent_log','imports','person_aliases','settings'];
 function invalid(message) {const error=new Error(message);error.status=400;throw error;}
 let lastError=null,externalAt=null;
 const external=process.env.SCHUETZEN_BACKUP_DIR ? path.resolve(process.env.SCHUETZEN_BACKUP_DIR) : null;

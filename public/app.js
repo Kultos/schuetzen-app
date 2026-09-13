@@ -33,12 +33,15 @@ function el(tag, attrs = {}, children = []) {
 let state = {
   shooters: [],
   disciplines: [],
+  teams: [],
+  event: null,
   eventTitle: '',
 };
 
 const dashboardState = {
   snapshot: null,
   disciplineId: null,
+  rankingMode: 'individual',
   refreshTimer: null,
   rotationTimer: null,
   clockTimer: null,
@@ -54,9 +57,11 @@ function renderEventTitle() {
 async function loadEventTitle() {
   const season = await api('/api/season');
   state.eventTitle = season.title || '';
+  state.event = season.event;
   state.eventId = season.event.id;
   document.getElementById('seasonYear').value = season.event.year || '';
   document.getElementById('seasonTitle').value = state.eventTitle;
+  applyTeamSettings(season.event);
   renderEventTitle();
 }
 
@@ -74,6 +79,7 @@ document.querySelectorAll('.tab').forEach((btn) => {
     else stopDashboard();
     if (btn.dataset.tab === 'results') refreshResultSelectors();
     if (btn.dataset.tab === 'rankings') refreshRankingSelector();
+    if (btn.dataset.tab === 'teams') loadTeams();
     if (btn.dataset.tab === 'season') refreshSeasonInfo();
     if (btn.dataset.tab === 'people') loadPeople();
   });
@@ -126,9 +132,25 @@ function renderDashboardRanking(discipline) {
   const container = document.getElementById('dashboardRanking');
   container.innerHTML = '';
 
-  if (!discipline || !discipline.ranking.length) {
+  const teamRanking=dashboardState.rankingMode==='team';
+  const ranking=teamRanking ? discipline?.team_ranking || [] : discipline?.ranking || [];
+  if (!discipline || !ranking.length) {
     container.appendChild(el('div', { class: 'dashboard-empty', text: 'Sobald Ergebnisse erfasst sind, erscheint hier die Rangliste.' }));
     return;
+  }
+
+  if(teamRanking) {
+    const list=el('ol',{class:'ranking-list'});
+    for(const entry of ranking.slice(0,8)) {
+      const medal=entry.rank<=3 ? ` rank-${entry.rank}` : '';
+      list.appendChild(el('li',{class:`ranking-row${medal}`},[
+        el('span',{class:'rank-number',text:entry.rank}),
+        el('span',{class:'rank-name',text:entry.name}),
+        el('span',{class:'rank-rounds',text:`${entry.counted_count}/${entry.required_count} gewertet`}),
+        el('strong',{class:'rank-score',text:formatPoints(entry.total_points)})
+      ]));
+    }
+    container.appendChild(list);return;
   }
 
   const groups = discipline.ranking_mode === 'separate'
@@ -179,6 +201,15 @@ function renderDashboard() {
     dashboardState.disciplineId = disciplines[0] ? disciplines[0].id : null;
   }
   const selected = disciplines.find((d) => String(d.id) === String(dashboardState.disciplineId));
+  if(data.scoring_mode==='team') dashboardState.rankingMode='team';
+  if(data.scoring_mode==='individual') dashboardState.rankingMode='individual';
+  const modeSwitch=document.getElementById('dashboardRankingMode');
+  modeSwitch.hidden=data.scoring_mode!=='both';
+  document.getElementById('dashboardIndividualRankingBtn').classList.toggle('active',dashboardState.rankingMode==='individual');
+  document.getElementById('dashboardTeamRankingBtn').classList.toggle('active',dashboardState.rankingMode==='team');
+  document.getElementById('dashboardIndividualRankingBtn').setAttribute('aria-pressed',String(dashboardState.rankingMode==='individual'));
+  document.getElementById('dashboardTeamRankingBtn').setAttribute('aria-pressed',String(dashboardState.rankingMode==='team'));
+  document.getElementById('dashboardRankingKind').textContent=dashboardState.rankingMode==='team' ? 'Aktuelle Mannschaftswertung' : 'Aktuelle Einzelwertung';
 
   document.getElementById('dashboardEventTitle').textContent = data.event_title || 'Schützen-Wettkampf';
   document.getElementById('dashboardShooterCount').textContent = data.stats.shooters;
@@ -243,6 +274,8 @@ function stopDashboard() {
 }
 
 document.getElementById('dashboardRotation').addEventListener('change', scheduleDashboardRotation);
+document.getElementById('dashboardIndividualRankingBtn').addEventListener('click',()=>{dashboardState.rankingMode='individual';renderDashboard();});
+document.getElementById('dashboardTeamRankingBtn').addEventListener('click',()=>{dashboardState.rankingMode='team';renderDashboard();});
 document.getElementById('openTvDashboardBtn').addEventListener('click', () => window.open('/dashboard', '_blank'));
 document.getElementById('exitTvDashboardBtn').addEventListener('click', () => { window.location.href = '/'; });
 
@@ -458,6 +491,107 @@ document.getElementById('disciplineForm').addEventListener('submit', async (e) =
   loadDisciplines();
 });
 
+// ---------------- Teams ----------------
+
+const teamView = { teamId: null, busy: false };
+
+function teamModeEnabled() {
+  return state.event && state.event.scoring_mode !== 'individual';
+}
+
+function applyTeamSettings(event) {
+  state.event = event;
+  const radio = document.querySelector(`input[name="teamScoringMode"][value="${event.scoring_mode}"]`);
+  if (radio) radio.checked = true;
+  document.getElementById('teamMaxMembers').value = event.team_max_members;
+  document.getElementById('teamCountedResults').value = event.team_counted_results;
+  document.getElementById('teamSelectionHint').hidden = event.scoring_mode === 'individual';
+  document.getElementById('individualRankingHint').hidden = event.scoring_mode === 'team';
+  const tabs = document.getElementById('rankingModeTabs');
+  tabs.hidden = event.scoring_mode !== 'both';
+  if (event.scoring_mode === 'team') rankingView.mode = 'team';
+  if (event.scoring_mode === 'individual') rankingView.mode = 'individual';
+}
+
+async function loadTeams() {
+  const [teams,shooters,event] = await Promise.all([api('/api/teams'),api('/api/shooters'),api('/api/team-settings')]);
+  state.teams=teams;state.shooters=shooters;applyTeamSettings(event);
+  if(!teams.some(team=>team.id===teamView.teamId)) teamView.teamId=teams[0]?.id ?? null;
+  renderTeams();
+}
+
+function renderTeams() {
+  const max=state.event?.team_max_members || 5;
+  document.getElementById('teamRules').textContent=teamModeEnabled()
+    ? `Pro Mannschaft sind höchstens ${max} Mitglieder erlaubt; je Disziplin werden die besten ${state.event.team_counted_results} markierten Ergebnisse gewertet.`
+    : 'Für dieses Event ist derzeit nur die Einzelwertung aktiv. Mannschaften können vorbereitet und unter „Saison & Netzwerk“ aktiviert werden.';
+  const list=document.getElementById('teamList');list.replaceChildren();
+  for(const team of state.teams) list.appendChild(el('button',{type:'button',class:team.id===teamView.teamId?'active':'','aria-pressed':String(team.id===teamView.teamId),onclick:()=>{teamView.teamId=team.id;renderTeams();}},[
+    el('span',{class:'team-option'},[el('strong',{text:team.name}),el('small',{text:`${team.member_count} von ${max} Mitgliedern`}),el('span',{class:'capacity',text:`${team.member_count}/${max}`})])
+  ]));
+  if(!state.teams.length) list.appendChild(el('p',{class:'hint',text:'Noch keine Mannschaft angelegt.'}));
+  const selected=state.teams.find(team=>team.id===teamView.teamId);
+  const header=document.getElementById('selectedTeamHeader');header.replaceChildren();
+  if(selected) {
+    header.append(el('div',{class:'team-detail-title'},[el('h3',{text:selected.name}),el('small',{text:`${selected.member_count} von ${max} Plätzen belegt`})]),
+      el('div',{class:'team-actions'},[
+        el('button',{type:'button',class:'link',text:'Umbenennen',onclick:async()=>{const name=prompt('Neuer Mannschaftsname',selected.name);if(!name?.trim())return;await teamMutation(`/api/teams/${selected.id}`,{method:'PUT',body:JSON.stringify({name:name.trim()})},'Mannschaft umbenannt.');}}),
+        el('button',{type:'button',class:'link danger-text',text:'Löschen',onclick:async()=>{if(!confirm(`Mannschaft „${selected.name}“ löschen? Die Teilnehmer bleiben im Event.`))return;await teamMutation(`/api/teams/${selected.id}`,{method:'DELETE'},'Mannschaft gelöscht.');}})
+      ]));
+  } else header.appendChild(el('h3',{text:'Mannschaft auswählen'}));
+  renderTeamMembers();
+}
+
+function renderTeamMembers() {
+  const rows=document.getElementById('teamMemberRows');rows.replaceChildren();
+  const query=document.getElementById('memberSearch').value.trim().toLocaleLowerCase('de-DE');
+  const membership=new Map();
+  for(const team of state.teams) for(const member of team.members) membership.set(member.shooter_id,team);
+  const shooters=state.shooters.filter(shooter=>`${shooter.start_number} ${shooter.name}`.toLocaleLowerCase('de-DE').includes(query));
+  for(const shooter of shooters) {
+    const currentTeam=membership.get(shooter.id);
+    const select=el('select',{'aria-label':`Mannschaft für ${shooter.name}`},[
+      el('option',{value:'',text:'– keine Mannschaft –'}),
+      ...state.teams.map(team=>el('option',{value:team.id,text:team.name}))
+    ]);
+    select.value=currentTeam?.id || '';
+    select.disabled=teamView.busy;
+    select.addEventListener('change',async()=>{
+      const before=currentTeam?.id || '';
+      try {
+        if(select.value) await teamMutation(`/api/teams/${select.value}/members/${shooter.id}`,{method:'PUT'},`${shooter.name} wurde zugeordnet.`);
+        else await teamMutation(`/api/teams/members/${shooter.id}`,{method:'DELETE'},`${shooter.name} wurde aus der Mannschaft entfernt.`);
+      } catch(error) { select.value=before; }
+    });
+    rows.appendChild(el('tr',{},[el('td',{text:shooter.start_number}),el('td',{text:shooter.name}),el('td',{class:'current-team',text:currentTeam?.name || 'Nicht zugeordnet'}),el('td',{},[select])]));
+  }
+  if(!shooters.length) rows.appendChild(el('tr',{},[el('td',{colspan:'4',class:'hint',text:state.shooters.length?'Keine Treffer.':'Noch keine Teilnehmer im Event.'})]));
+}
+
+async function teamMutation(path,options,message) {
+  if(teamView.busy)return;
+  teamView.busy=true;document.getElementById('teamFeedback').textContent='Wird gespeichert …';
+  try {await api(path,options);document.getElementById('teamFeedback').textContent=message;await loadTeams();}
+  catch(error){document.getElementById('teamFeedback').textContent='Speichern fehlgeschlagen: '+error.message;throw error;}
+  finally{teamView.busy=false;renderTeamMembers();}
+}
+
+document.getElementById('teamForm').addEventListener('submit',async event=>{
+  event.preventDefault();const input=document.getElementById('teamName');
+  try {await teamMutation('/api/teams',{method:'POST',body:JSON.stringify({name:input.value})},'Mannschaft angelegt.');input.value='';}
+  catch {}
+});
+document.getElementById('memberSearch').addEventListener('input',renderTeamMembers);
+
+document.getElementById('teamSettingsForm').addEventListener('submit',async event=>{
+  event.preventDefault();const status=document.getElementById('teamSettingsStatus');status.textContent='Wird gespeichert …';
+  const scoring_mode=document.querySelector('input[name="teamScoringMode"]:checked')?.value;
+  try {
+    const saved=await api('/api/team-settings',{method:'PUT',body:JSON.stringify({scoring_mode,team_max_members:Number(document.getElementById('teamMaxMembers').value),team_counted_results:Number(document.getElementById('teamCountedResults').value)})});
+    applyTeamSettings(saved);status.textContent='Mannschaftswertung gespeichert.';
+  } catch(error){status.textContent='Fehler: '+error.message;}
+});
+
 // ---------------- Results ----------------
 
 function fillSelect(selectEl, items, valueKey, labelFn) {
@@ -469,7 +603,7 @@ function fillSelect(selectEl, items, valueKey, labelFn) {
 
 // ---------------- Rankings ----------------
 
-const rankingView = { disciplineId: null, request: 0 };
+const rankingView = { disciplineId: null, request: 0, mode: 'individual' };
 
 function renderRankingDisciplines() {
   const nav = document.getElementById('rankingDisciplines');
@@ -493,6 +627,8 @@ function renderRankingDisciplines() {
 
 async function refreshRankingSelector() {
   if (!state.disciplines.length) await loadDisciplines();
+  if(state.event?.scoring_mode==='team') rankingView.mode='team';
+  if(state.event?.scoring_mode==='individual') rankingView.mode='individual';
   if (!state.disciplines.some((d) => d.id === rankingView.disciplineId)) {
     rankingView.disciplineId = state.disciplines[0]?.id ?? null;
   }
@@ -511,7 +647,14 @@ async function loadRanking() {
   printButton.disabled = true;
   const discipline = state.disciplines.find((d) => String(d.id) === String(disciplineId));
   document.getElementById('rankingDisciplineName').textContent = discipline ? discipline.name : 'Disziplin auswählen';
-  document.getElementById('printTitle').textContent = 'Rangliste – ' + (discipline ? discipline.name : '');
+  const teamRanking=rankingView.mode==='team';
+  document.getElementById('individualRankingBtn').class = teamRanking ? '' : 'active';
+  document.getElementById('teamRankingBtn').class = teamRanking ? 'active' : '';
+  document.getElementById('individualRankingBtn').setAttribute?.('class',teamRanking ? '' : 'active');
+  document.getElementById('teamRankingBtn').setAttribute?.('class',teamRanking ? 'active' : '');
+  document.getElementById('printTitle').textContent = (teamRanking ? 'Mannschaftsrangliste – ' : 'Rangliste – ') + (discipline ? discipline.name : '');
+  document.getElementById('rankingExplanation').textContent=teamRanking && state.event
+    ? `Je Mannschaft zählen die besten ${state.event.team_counted_results} ausdrücklich markierten Ergebnisse. Bei Gleichstand werden diese Einzelergebnisse absteigend verglichen.` : '';
   if (!discipline) {
     status.textContent = 'Sobald Disziplinen angelegt sind, erscheinen hier die Ranglisten.';
     return;
@@ -520,7 +663,7 @@ async function loadRanking() {
   status.textContent = 'Rangliste wird geladen …';
   let ranking;
   try {
-    ranking = await api(`/api/rankings/${disciplineId}`);
+    ranking = await api(`/${teamRanking ? 'api/team-rankings' : 'api/rankings'}/${disciplineId}`);
   } catch (error) {
     if (request === rankingView.request && eventId === state.eventId) status.textContent = 'Rangliste konnte nicht geladen werden: ' + error.message + ' Bitte die Disziplin erneut auswählen.';
     return;
@@ -528,6 +671,29 @@ async function loadRanking() {
   if (request !== rankingView.request || eventId !== state.eventId) return;
   status.textContent = ranking.length ? '' : 'Für diese Disziplin sind noch keine Ergebnisse erfasst.';
   printButton.disabled = !ranking.length;
+  if(teamRanking) {
+    const body=el('tbody');
+    for(const team of ranking) {
+      const main=el('tr',{class:'team-ranking-row','aria-expanded':'false',tabindex:'0'},[
+        el('td',{class:'rank-cell',text:team.rank}),
+        el('td',{class:'ranking-team-name'},[el('strong',{text:team.name}),el('small',{text:`${team.counted_count}/${team.required_count} Ergebnisse gewertet · ${team.member_count} Mitglieder`})]),
+        el('td',{text:team.entries.filter(entry=>entry.counted).map(entry=>formatPoints(entry.points)).join(' + ')}),
+        el('td',{class:'ranking-score',text:formatPoints(team.total_points)})
+      ]);
+      const details=el('div',{class:'ranking-details'});
+      for(const entry of team.entries) details.appendChild(el('div',{class:'detail-member'},[
+        el('span',{text:`#${entry.start_number} · ${entry.name}`}),el('strong',{text:formatPoints(entry.points)}),
+        el('span',{class:entry.counted?'included':'dropped',text:entry.counted?'✓ Wird gewertet':'Streichergebnis'})
+      ]));
+      if(team.member_count>team.selected_count) details.appendChild(el('p',{class:'hint',text:`${team.member_count-team.selected_count} Mitglied(er) ohne markierten Durchgang in dieser Disziplin.`}));
+      const detailRow=el('tr',{class:'detail-row',hidden:''},[el('td',{colspan:'4'},[details])]);
+      const toggle=()=>{const open=main['aria-expanded']==='true';main['aria-expanded']=String(!open);main.setAttribute?.('aria-expanded',String(!open));detailRow.hidden=open;if(open)detailRow.setAttribute?.('hidden','');else detailRow.removeAttribute?.('hidden');};
+      main.onclick=toggle;main.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();toggle();}};
+      body.appendChild(main);body.appendChild(detailRow);
+    }
+    tables.appendChild(el('table',{class:'data-table ranking-table'},[el('thead',{},[el('tr',{},['Platz','Mannschaft','Gewertete Ergebnisse','Gesamtpunkte'].map(text=>el('th',{text})))]),body]));
+    return;
+  }
   const groups = discipline.ranking_mode === 'separate' ? [['women','Frauen'],['men','Männer']] : [['combined','Gemeinsame Wertung']];
   for (const [group, label] of groups) {
     const rows = ranking.filter((r) => r.ranking_group === group);
@@ -548,6 +714,9 @@ async function loadRanking() {
     tables.appendChild(table);
   }
 }
+
+document.getElementById('individualRankingBtn').addEventListener('click',()=>{rankingView.mode='individual';loadRanking();});
+document.getElementById('teamRankingBtn').addEventListener('click',()=>{rankingView.mode='team';loadRanking();});
 
 document.getElementById('printRankingBtn').addEventListener('click', () => window.print());
 

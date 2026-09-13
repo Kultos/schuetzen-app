@@ -14,9 +14,11 @@ const Archives = require('./archives');
 const {
   Shooters,
   Disciplines,
+  Teams,
   Results,
   Season,
   rankingForDiscipline,
+  teamRankingForDiscipline,
   dashboardSnapshot,
   fullExport,
   archiveCurrentSeason,
@@ -156,7 +158,7 @@ async function handleApi(req, res, pathname, query) {
   }
   if(!Auth.protectedTransport(req)) return sendError(res,403,'Verwaltung im LAN erfordert HTTPS. Direkt am Server ist localhost verfügbar.');
   if(!Auth.session(req)) return sendError(res,401,'Bitte anmelden');
-  const eventWrite=method!=='GET' && (/^\/api\/(shooters|disciplines|results)(\/|$)/.test(pathname) || pathname==='/api/import' || pathname==='/api/season' || pathname==='/api/season/reset' || /^\/api\/people\/\d+\/register$/.test(pathname));
+  const eventWrite=method!=='GET' && (/^\/api\/(shooters|disciplines|results|teams)(\/|$)/.test(pathname) || pathname==='/api/team-settings' || pathname==='/api/import' || pathname==='/api/season' || pathname==='/api/season/reset' || /^\/api\/people\/\d+\/register$/.test(pathname));
   if(eventWrite) assertCurrentEvent(req);
   const reviewAllowed=['/api/backups','/api/backup/preview','/api/backup/restore','/api/privacy/review','/api/people'].includes(pathname) || /^\/api\/backups\//.test(pathname) || /^\/api\/people\/\d+(\/contact|\/consent-log|\/erase|\/history)?$/.test(pathname);
   if(setting('privacy_review')==='1' && !reviewAllowed) return sendError(res,423,'Datenschutzabgleich nach Restore erforderlich');
@@ -309,6 +311,25 @@ async function handleApi(req, res, pathname, query) {
     }
   }
 
+  // ---- Mannschaften und Mannschaftswertung ----
+  if (pathname === '/api/team-settings') {
+    if (method === 'GET') return sendJSON(res, 200, Events.active());
+    if (method === 'PUT') return sendJSON(res, 200, Events.teamSettings(Events.active().id, await readEventBody(req)));
+  }
+  if (pathname === '/api/teams' && method === 'GET') return sendJSON(res, 200, Teams.list());
+  if (pathname === '/api/teams' && method === 'POST') return sendJSON(res, 201, Teams.create(await readEventBody(req)));
+  if ((m = pathname.match(/^\/api\/teams\/(\d+)$/))) {
+    const id=Number(m[1]);
+    if (method === 'PUT') return sendJSON(res, 200, Teams.update(id, await readEventBody(req)));
+    if (method === 'DELETE') { Teams.remove(id); return sendJSON(res, 200, {ok:true}); }
+  }
+  if ((m = pathname.match(/^\/api\/teams\/(\d+)\/members\/(\d+)$/))) {
+    if (method === 'PUT') return sendJSON(res, 200, Teams.assign(Number(m[1]), Number(m[2])));
+  }
+  if ((m = pathname.match(/^\/api\/teams\/members\/(\d+)$/)) && method === 'DELETE') {
+    Teams.unassign(Number(m[1])); return sendJSON(res, 200, {ok:true});
+  }
+
   // ---- Results ----
   if (pathname === '/api/results' && method === 'GET') {
     const shooterId = Number(query.shooter_id);
@@ -356,11 +377,18 @@ async function handleApi(req, res, pathname, query) {
       return sendJSON(res, 200, { ok: true });
     }
   }
+  if ((m = pathname.match(/^\/api\/results\/(\d+)\/team-selection$/)) && method === 'PUT') {
+    const body=await readEventBody(req);
+    return sendJSON(res, 200, Results.selectForTeam(Number(m[1]), body.selected!==false));
+  }
 
   // ---- Rankings ----
   if ((m = pathname.match(/^\/api\/rankings\/(\d+)$/)) && method === 'GET') {
     const disciplineId = Number(m[1]);
     return sendJSON(res, 200, rankingForDiscipline(disciplineId));
+  }
+  if ((m = pathname.match(/^\/api\/team-rankings\/(\d+)$/)) && method === 'GET') {
+    return sendJSON(res, 200, teamRankingForDiscipline(Number(m[1])));
   }
 
   // ---- Live-Dashboard (TV-Ansicht) ----
