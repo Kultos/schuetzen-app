@@ -86,7 +86,7 @@ document.querySelectorAll('.tab').forEach((btn) => {
     document.querySelectorAll('.tab').forEach((b) => b.classList.remove('active'));
     document.querySelectorAll('.panel').forEach((p) => p.classList.remove('active'));
     btn.classList.add('active');
-    document.querySelector('main').classList.toggle('results-main', ['results', 'rankings'].includes(btn.dataset.tab));
+    document.querySelector('main').classList.toggle('results-main', ['teams', 'results', 'rankings'].includes(btn.dataset.tab));
     document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
     if (btn.dataset.tab === 'dashboard') startDashboard();
     else stopDashboard();
