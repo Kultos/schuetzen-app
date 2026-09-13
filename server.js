@@ -233,6 +233,8 @@ async function handleApi(req, res, pathname, query) {
     if (!['m', 'w'].includes(body.gender)) return sendError(res, 400, "gender muss 'm' oder 'w' sein");
     const startNumber = Object.hasOwn(body, 'start_number') ? parsePositiveInteger(body.start_number) : Shooters.nextStartNumber();
     if (!startNumber) return sendError(res, 400, 'start_number muss eine positive ganze Zahl sein');
+    const teamId = body.team_id === undefined || body.team_id === null || body.team_id === '' ? null : parsePositiveInteger(body.team_id);
+    if (body.team_id !== undefined && body.team_id !== null && body.team_id !== '' && !teamId) return sendError(res, 400, 'team_id muss eine positive ganze Zahl sein');
     const conflict = Shooters.findByStartNumber(startNumber);
     if (conflict) {
       return sendError(res, 409, `Startnummer ${startNumber} ist bereits vergeben`, {
@@ -241,7 +243,7 @@ async function handleApi(req, res, pathname, query) {
         suggested_start_number: Shooters.nextStartNumber(),
       });
     }
-    return sendJSON(res, 201, Shooters.create({ name, gender: body.gender, start_number: startNumber }));
+    return sendJSON(res, 201, Shooters.create({ name, gender: body.gender, start_number: startNumber, team_id: teamId }));
   }
   let m;
   if ((m = pathname.match(/^\/api\/shooters\/(\d+)$/))) {
@@ -256,6 +258,8 @@ async function handleApi(req, res, pathname, query) {
       if (!current) return sendError(res, 404, 'Schütze nicht gefunden');
       const startNumber = Object.hasOwn(body, 'start_number') ? parsePositiveInteger(body.start_number) : current.start_number;
       if (!startNumber) return sendError(res, 400, 'start_number muss eine positive ganze Zahl sein');
+      const teamId = body.team_id === undefined ? undefined : body.team_id === null || body.team_id === '' ? null : parsePositiveInteger(body.team_id);
+      if (body.team_id !== undefined && body.team_id !== null && body.team_id !== '' && !teamId) return sendError(res, 400, 'team_id muss eine positive ganze Zahl sein');
       const conflict = Shooters.findByStartNumber(startNumber);
       const swapOnConflict = body.conflict_resolution === 'swap';
       if (conflict && conflict.id !== id && !swapOnConflict) {
@@ -266,7 +270,7 @@ async function handleApi(req, res, pathname, query) {
       }
       return sendJSON(res, 200, Shooters.update(
         id,
-        { name, gender: body.gender, start_number: startNumber },
+        { name, gender: body.gender, start_number: startNumber, ...(body.team_id === undefined ? {} : {team_id:teamId}) },
         { swapOnConflict }
       ));
     }

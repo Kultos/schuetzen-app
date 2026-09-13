@@ -171,8 +171,12 @@ button.link.danger-text { color: var(--danger); }
 
 .start-number-field { display: grid; gap: 0.2rem; color: #55665e; font-size: 0.78rem; }
 .start-number-field input { width: 8rem; }
+.shooter-team-field { display: grid; gap: 0.2rem; color: #55665e; font-size: 0.78rem; }
+.shooter-team-field[hidden] { display: none; }
+.shooter-team-field select { min-width: 12rem; }
 .start-number-cell { font-variant-numeric: tabular-nums; font-weight: 700; }
 .edit-start-number { width: 7rem; }
+.edit-team-select { min-width: 11rem; }
 
 .row-actions button { margin-right: 0.4rem; }
 .row-actions button:last-child { margin-right: 0; }
@@ -356,6 +360,9 @@ body.tv-mode .tv-only { display: block; }
 
 /* Mannschaftswertung */
 .team-workspace { margin-top: 1rem; }
+.team-create { margin: .5rem 0; }
+.team-create summary { width: fit-content; cursor: pointer; color: var(--primary); font-weight: 600; }
+.team-create .inline-form { margin: .7rem 0 0; }
 .sidebar-options { display: grid; gap: 7px; }
 .sidebar-options button {
   width: 100%; min-height: 44px; text-align: left; background: transparent;
@@ -374,8 +381,26 @@ body.tv-mode .tv-only { display: block; }
 .team-actions { display: flex; gap: .35rem; }
 .member-search-label { justify-content: flex-start; margin-bottom: .4rem; }
 .member-search-label input { width: min(320px, 100%); }
-#teamMemberRows select { min-width: 145px; }
-#teamMemberRows .current-team { color: #55665e; font-size: .85rem; }
+.team-summary-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(170px,1fr)); gap: .7rem; margin: .8rem 0 1.2rem; }
+.team-summary-card { display: grid; gap: .25rem; padding: .8rem; border: 1px solid var(--border); border-radius: 7px; background: #f7f9f5; }
+.team-summary-card span { color: #55665e; font-size: .78rem; font-weight: 600; }
+.team-summary-card strong { color: var(--primary); font-size: 1.45rem; font-variant-numeric: tabular-nums; }
+.team-summary-card small { color: #55665e; }
+.team-results-title { margin: 0 0 .55rem; }
+.team-score strong,.team-score small { display: block; }
+.team-score strong { font-size: 1rem; font-variant-numeric: tabular-nums; }
+.team-score small { margin-top: .15rem; color: #55665e; white-space: nowrap; }
+.team-score.counted { background: #edf6e9; color: #28613d; }
+.team-score.dropped { background: #fff8e5; color: #735e24; }
+.team-score.missing { color: #7b8780; }
+.team-member-panel { margin-top: 1.2rem; padding: 1rem; border: 1px solid var(--border); border-radius: 8px; background: #f7f9f5; }
+.team-member-panel[hidden] { display: none; }
+.team-member-panel > header,.available-team-member { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.team-member-panel h4,.team-member-panel header p { margin: 0 0 .25rem; }
+.available-team-members { display: grid; gap: .45rem; margin-top: .75rem; }
+.available-team-member { padding: .6rem .7rem; border: 1px solid var(--border); border-radius: 6px; background: white; }
+.available-team-member > div { display: grid; gap: .15rem; }
+.available-team-member small { color: #55665e; }
 .team-badge {
   display: inline-block; margin-top: .25rem; padding: .2rem .5rem; border-radius: 999px;
   background: #e5efdf; color: var(--primary); font-size: .8rem; font-weight: 600;
@@ -411,7 +436,7 @@ body.tv-mode .tv-only { display: block; }
 
 @media (max-width: 700px) {
   .team-actions { flex-wrap: wrap; }
-  #teamMemberRows td { min-width: 130px; }
+  .team-member-panel > header,.available-team-member { align-items: stretch; flex-direction: column; }
   .ranking-details { padding-left: 1rem; }
   .detail-member { grid-template-columns: 1fr auto; }
   .detail-member span:last-child { grid-column: 1 / -1; }

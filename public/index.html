@@ -121,11 +121,14 @@
           <option value="m">männlich</option>
           <option value="w">weiblich</option>
         </select>
+        <label id="shooterTeamField" class="shooter-team-field" hidden>Mannschaft
+          <select id="shooterTeam"></select>
+        </label>
         <button type="submit">Hinzufügen</button>
       </form>
       <p id="startNumberHint" class="hint">Die nächste freie Startnummer wird vorgeschlagen und kann vor dem Speichern geändert werden.</p>
       <table class="data-table">
-        <thead><tr><th>Startnummer</th><th>Name</th><th>Geschlecht</th><th></th></tr></thead>
+        <thead><tr><th>Startnummer</th><th>Name</th><th>Geschlecht</th><th>Mannschaft</th><th></th></tr></thead>
         <tbody id="shooterTableBody"></tbody>
       </table>
     </section>
@@ -145,11 +148,14 @@
     <!-- MANNSCHAFTEN -->
     <section id="tab-teams" class="panel">
       <h2>Mannschaften</h2>
-      <p>Mannschaften anlegen und Teilnehmer des aktuellen Events eindeutig zuordnen.</p>
-      <form id="teamForm" class="inline-form">
-        <input id="teamName" type="text" maxlength="200" required placeholder="Name der Mannschaft">
-        <button type="submit">Mannschaft hinzufügen</button>
-      </form>
+      <p>Punktestand und gewertete Ergebnisse einer Mannschaft nach Disziplin überblicken.</p>
+      <details id="teamCreateDetails" class="team-create">
+        <summary>Neue Mannschaft anlegen</summary>
+        <form id="teamForm" class="inline-form">
+          <input id="teamName" type="text" maxlength="200" required placeholder="Name der Mannschaft">
+          <button type="submit">Mannschaft hinzufügen</button>
+        </form>
+      </details>
       <p id="teamRules" class="hint"></p>
       <div class="results-workspace team-workspace">
         <aside class="results-sidebar" aria-label="Mannschaft auswählen">
@@ -158,13 +164,20 @@
         </aside>
         <div class="results-overview members-overview">
           <header id="selectedTeamHeader" class="results-heading"><h3>Mannschaft auswählen</h3></header>
-          <label class="results-filter member-search-label">Teilnehmer suchen <input id="memberSearch" type="search" placeholder="Name oder Startnummer …"></label>
-          <div class="table-scroll">
+          <p id="teamOverviewStatus" class="hint" role="status"></p>
+          <div id="teamDisciplineSummaries" class="team-summary-grid"></div>
+          <h4 id="teamResultsTitle" class="team-results-title">Ergebnisse der Mannschaft</h4>
+          <div id="teamResultsTable" class="table-scroll">
             <table class="data-table">
-              <thead><tr><th>Startnummer</th><th>Name</th><th>Aktuelle Mannschaft</th><th>Zuordnen</th></tr></thead>
-              <tbody id="teamMemberRows"></tbody>
+              <thead><tr id="teamResultsHead"></tr></thead>
+              <tbody id="teamResultsBody"></tbody>
             </table>
           </div>
+          <section id="teamMemberPanel" class="team-member-panel" hidden>
+            <header><div><h4>Schützen hinzufügen</h4><p class="hint">Nicht zugeordnete Schützen werden direkt hinzugefügt. Bereits zugeordnete Schützen können in diese Mannschaft verschoben werden.</p></div><button id="closeTeamMemberPanel" type="button" class="link">Schließen</button></header>
+            <label class="results-filter member-search-label">Schützen suchen <input id="teamMemberSearch" type="search" placeholder="Name oder Startnummer …"></label>
+            <div id="availableTeamMembers" class="available-team-members"></div>
+          </section>
         </div>
       </div>
       <p id="teamFeedback" role="status" aria-live="polite"></p>

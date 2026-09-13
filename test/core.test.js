@@ -420,6 +420,8 @@ test('Mannschafts-API speichert Einstellungen, Zuordnungen und die gewählte Run
   response=await api('/api/teams',{method:'POST',json:{name:'Adler'}});
   const team=response.body;
   assert.equal(response.response.status,201);
+  const direct=await api('/api/shooters',{method:'POST',json:{name:'Direkt zugeordnet',gender:'m',team_id:team.id}});
+  assert.equal(direct.response.status,201);
   await api(`/api/teams/${team.id}/members/${first.id}`,{method:'PUT',json:{}});
   await api(`/api/teams/${team.id}/members/${second.id}`,{method:'PUT',json:{}});
   const firstResult=Results.create({shooter_id:first.id,discipline_id:discipline.id,round_number:1,points:90});
@@ -428,7 +430,19 @@ test('Mannschafts-API speichert Einstellungen, Zuordnungen und die gewählte Run
   await api(`/api/results/${secondResult.id}/team-selection`,{method:'PUT',json:{selected:true}});
   response=await api(`/api/team-rankings/${discipline.id}`);
   assert.deepEqual(response.body.map(row=>[row.name,row.total_points,row.counted_count]),[['Adler',170,2]]);
-  assert.equal((await api('/api/teams')).body[0].members.length,2);
+  assert.equal((await api('/api/teams')).body[0].members.length,3);
+  const secondTeam=(await api('/api/teams',{method:'POST',json:{name:'Falken'}})).body;
+  const reassigned=await api(`/api/shooters/${direct.body.id}`,{method:'PUT',json:{name:direct.body.name,gender:direct.body.gender,start_number:direct.body.start_number,team_id:secondTeam.id}});
+  assert.equal(reassigned.response.status,200);
+  let teamRows=(await api('/api/teams')).body;
+  assert.equal(teamRows.find(row=>row.id===team.id).members.length,2);
+  assert.equal(teamRows.find(row=>row.id===secondTeam.id).members[0].shooter_id,direct.body.id);
+  await api(`/api/shooters/${direct.body.id}`,{method:'PUT',json:{name:direct.body.name,gender:direct.body.gender,start_number:direct.body.start_number,team_id:null}});
+  teamRows=(await api('/api/teams')).body;
+  assert.equal(teamRows.find(row=>row.id===secondTeam.id).members.length,0);
+  const invalid=await api('/api/shooters',{method:'POST',json:{name:'Nicht halb anlegen',gender:'m',team_id:99999}});
+  assert.equal(invalid.response.status,400);
+  assert.equal(People.list('Nicht halb anlegen').length,0);
 });
 
 test('Saisontitel wird über die API gelesen, getrimmt und begrenzt', async () => {

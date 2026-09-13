@@ -284,13 +284,30 @@ document.getElementById('exitTvDashboardBtn').addEventListener('click', () => { 
 let editingShooterId = null;
 
 async function loadShooters() {
-  state.shooters = await api('/api/shooters');
+  const [shooters,teams]=await Promise.all([api('/api/shooters'),api('/api/teams')]);
+  state.shooters = shooters;
+  state.teams = teams;
+  renderShooterTeamSelect();
   const body = document.getElementById('shooterTableBody');
   body.innerHTML = '';
   for (const s of state.shooters) {
     body.appendChild(s.id === editingShooterId ? renderShooterEditRow(s) : renderShooterRow(s));
   }
   if (!editingShooterId) await refreshStartNumberSuggestion();
+}
+
+function renderShooterTeamSelect() {
+  const field=document.getElementById('shooterTeamField');
+  const select=document.getElementById('shooterTeam');
+  field.hidden=!teamModeEnabled();
+  select.replaceChildren(el('option',{value:'',text:state.teams.length?'– keine Mannschaft –':'Noch keine Mannschaft angelegt'}));
+  for(const team of state.teams) {
+    const full=team.member_count>=state.event.team_max_members;
+    const attrs={value:team.id,text:`${team.name} (${team.member_count}/${state.event.team_max_members})`};
+    if(full) attrs.disabled='';
+    select.appendChild(el('option',attrs));
+  }
+  select.disabled=!state.teams.length;
 }
 
 async function refreshStartNumberSuggestion() {
@@ -301,10 +318,12 @@ async function refreshStartNumberSuggestion() {
 }
 
 function renderShooterRow(s) {
+  const team=state.teams.find(entry=>entry.members.some(member=>member.shooter_id===s.id));
   return el('tr', {}, [
     el('td', { class: 'start-number-cell', text: s.start_number }),
     el('td', { text: s.name }),
     el('td', { text: s.gender === 'w' ? 'weiblich' : 'männlich' }),
+    el('td', { text: team?.name || '–' }),
     el('td', { class: 'row-actions' }, [
       el('button', {
         class: 'link',
@@ -337,6 +356,7 @@ function renderShooterRow(s) {
 }
 
 function renderShooterEditRow(s) {
+  const team=state.teams.find(entry=>entry.members.some(member=>member.shooter_id===s.id));
   const startNumberInput = el('input', { class: 'edit-start-number', type: 'number', min: '1', step: '1', value: s.start_number });
   startNumberInput.value = s.start_number;
   const nameInput = el('input', { type: 'text', value: s.name });
@@ -346,13 +366,21 @@ function renderShooterEditRow(s) {
     el('option', { value: 'w', text: 'weiblich' }),
   ]);
   genderSelect.value = s.gender;
+  const teamSelect=el('select',{class:'edit-team-select','aria-label':`Mannschaft für ${s.name}`},[
+    el('option',{value:'',text:'– keine Mannschaft –'}),
+    ...state.teams.map(entry=>{
+      const full=entry.member_count>=state.event.team_max_members && entry.id!==team?.id;
+      return el('option',{value:entry.id,text:`${entry.name} (${entry.member_count}/${state.event.team_max_members})`,...(full?{disabled:''}:{})});
+    })
+  ]);
+  teamSelect.value=team?.id || '';
 
   const save = async () => {
     const name = nameInput.value.trim();
     const start_number = Number(startNumberInput.value);
     if (!name) { alert('Name darf nicht leer sein.'); return; }
     if (!Number.isSafeInteger(start_number) || start_number < 1) { alert('Die Startnummer muss eine positive ganze Zahl sein.'); return; }
-    const payload = { name, gender: genderSelect.value, start_number };
+    const payload = { name, gender: genderSelect.value, start_number, ...(teamModeEnabled()?{team_id:teamSelect.value?Number(teamSelect.value):null}:{}) };
     try {
       await api(`/api/shooters/${s.id}`, { method: 'PUT', body: JSON.stringify(payload) });
       editingShooterId = null;
@@ -383,6 +411,7 @@ function renderShooterEditRow(s) {
     el('td', {}, [startNumberInput]),
     el('td', {}, [nameInput]),
     el('td', {}, [genderSelect]),
+    teamModeEnabled() ? el('td', {}, [teamSelect]) : el('td', { text: team?.name || '–' }),
     el('td', { class: 'row-actions' }, [
       el('button', { text: 'Speichern', onclick: save }),
       el('button', { class: 'link', text: 'Abbrechen', onclick: cancel }),
@@ -395,11 +424,13 @@ document.getElementById('shooterForm').addEventListener('submit', async (e) => {
   const name = document.getElementById('shooterName').value.trim();
   const gender = document.getElementById('shooterGender').value;
   const startNumberInput = document.getElementById('shooterStartNumber');
+  const teamSelect = document.getElementById('shooterTeam');
   const start_number = Number(startNumberInput.value);
   if (!name) return;
   if (!Number.isSafeInteger(start_number) || start_number < 1) { alert('Die Startnummer muss eine positive ganze Zahl sein.'); return; }
   try {
-    await api('/api/shooters', { method: 'POST', body: JSON.stringify({ name, gender, start_number }) });
+    const team_id = !teamSelect.disabled && teamSelect.value ? Number(teamSelect.value) : null;
+    await api('/api/shooters', { method: 'POST', body: JSON.stringify({ name, gender, start_number, team_id }) });
     document.getElementById('shooterName').value = '';
     await loadShooters();
     document.getElementById('shooterName').focus();
@@ -493,7 +524,7 @@ document.getElementById('disciplineForm').addEventListener('submit', async (e) =
 
 // ---------------- Teams ----------------
 
-const teamView = { teamId: null, busy: false };
+const teamView = { teamId: null, busy: false, addOpen: false, rankings: new Map(), request: 0 };
 
 function teamModeEnabled() {
   return state.event && state.event.scoring_mode !== 'individual';
@@ -511,13 +542,15 @@ function applyTeamSettings(event) {
   tabs.hidden = event.scoring_mode !== 'both';
   if (event.scoring_mode === 'team') rankingView.mode = 'team';
   if (event.scoring_mode === 'individual') rankingView.mode = 'individual';
+  renderShooterTeamSelect();
 }
 
 async function loadTeams() {
-  const [teams,shooters,event] = await Promise.all([api('/api/teams'),api('/api/shooters'),api('/api/team-settings')]);
-  state.teams=teams;state.shooters=shooters;applyTeamSettings(event);
-  if(!teams.some(team=>team.id===teamView.teamId)) teamView.teamId=teams[0]?.id ?? null;
+  const [teams,shooters,disciplines,event] = await Promise.all([api('/api/teams'),api('/api/shooters'),api('/api/disciplines'),api('/api/team-settings')]);
+  state.teams=teams;state.shooters=shooters;state.disciplines=disciplines;teamView.rankings=new Map();applyTeamSettings(event);
+  if(!teams.some(team=>team.id===teamView.teamId)) {teamView.teamId=teams[0]?.id ?? null;teamView.addOpen=false;}
   renderTeams();
+  await loadTeamOverview();
 }
 
 function renderTeams() {
@@ -526,7 +559,7 @@ function renderTeams() {
     ? `Pro Mannschaft sind höchstens ${max} Mitglieder erlaubt; je Disziplin werden die besten ${state.event.team_counted_results} markierten Ergebnisse gewertet.`
     : 'Für dieses Event ist derzeit nur die Einzelwertung aktiv. Mannschaften können vorbereitet und unter „Saison & Netzwerk“ aktiviert werden.';
   const list=document.getElementById('teamList');list.replaceChildren();
-  for(const team of state.teams) list.appendChild(el('button',{type:'button',class:team.id===teamView.teamId?'active':'','aria-pressed':String(team.id===teamView.teamId),onclick:()=>{teamView.teamId=team.id;renderTeams();}},[
+  for(const team of state.teams) list.appendChild(el('button',{type:'button',class:team.id===teamView.teamId?'active':'','aria-pressed':String(team.id===teamView.teamId),onclick:()=>{teamView.teamId=team.id;teamView.addOpen=false;teamView.rankings=new Map();renderTeams();loadTeamOverview();}},[
     el('span',{class:'team-option'},[el('strong',{text:team.name}),el('small',{text:`${team.member_count} von ${max} Mitgliedern`}),el('span',{class:'capacity',text:`${team.member_count}/${max}`})])
   ]));
   if(!state.teams.length) list.appendChild(el('p',{class:'hint',text:'Noch keine Mannschaft angelegt.'}));
@@ -535,37 +568,88 @@ function renderTeams() {
   if(selected) {
     header.append(el('div',{class:'team-detail-title'},[el('h3',{text:selected.name}),el('small',{text:`${selected.member_count} von ${max} Plätzen belegt`})]),
       el('div',{class:'team-actions'},[
+        el('button',{type:'button',text:'Schützen hinzufügen',...(selected.member_count>=max?{disabled:''}:{}),onclick:()=>{teamView.addOpen=true;renderTeamMemberPanel();document.getElementById('teamMemberSearch').focus();}}),
         el('button',{type:'button',class:'link',text:'Umbenennen',onclick:async()=>{const name=prompt('Neuer Mannschaftsname',selected.name);if(!name?.trim())return;await teamMutation(`/api/teams/${selected.id}`,{method:'PUT',body:JSON.stringify({name:name.trim()})},'Mannschaft umbenannt.');}}),
         el('button',{type:'button',class:'link danger-text',text:'Löschen',onclick:async()=>{if(!confirm(`Mannschaft „${selected.name}“ löschen? Die Teilnehmer bleiben im Event.`))return;await teamMutation(`/api/teams/${selected.id}`,{method:'DELETE'},'Mannschaft gelöscht.');}})
       ]));
   } else header.appendChild(el('h3',{text:'Mannschaft auswählen'}));
-  renderTeamMembers();
+  document.getElementById('teamResultsTitle').hidden=!selected;
+  renderTeamOverview();
+  renderTeamMemberPanel();
 }
 
-function renderTeamMembers() {
-  const rows=document.getElementById('teamMemberRows');rows.replaceChildren();
-  const query=document.getElementById('memberSearch').value.trim().toLocaleLowerCase('de-DE');
+async function loadTeamOverview() {
+  const teamId=teamView.teamId,request=++teamView.request;
+  if(!teamId) {teamView.rankings=new Map();renderTeamOverview();return;}
+  document.getElementById('teamOverviewStatus').textContent='Mannschaftsergebnisse werden geladen …';
+  try {
+    const rankings=await Promise.all(state.disciplines.map(discipline=>api(`/api/team-rankings/${discipline.id}`)));
+    if(request!==teamView.request || teamId!==teamView.teamId)return;
+    teamView.rankings=new Map(state.disciplines.map((discipline,index)=>[discipline.id,rankings[index].find(team=>team.team_id===teamId) || null]));
+    document.getElementById('teamOverviewStatus').textContent='';
+    renderTeamOverview();
+  } catch(error) {
+    if(request===teamView.request) document.getElementById('teamOverviewStatus').textContent='Ergebnisse konnten nicht geladen werden: '+error.message;
+  }
+}
+
+function renderTeamOverview() {
+  const selected=state.teams.find(team=>team.id===teamView.teamId);
+  const summaries=document.getElementById('teamDisciplineSummaries');summaries.replaceChildren();
+  const head=document.getElementById('teamResultsHead');head.replaceChildren();
+  const body=document.getElementById('teamResultsBody');body.replaceChildren();
+  document.getElementById('teamResultsTable').hidden=!selected;
+  if(!selected) {document.getElementById('teamOverviewStatus').textContent=state.teams.length?'Mannschaft auswählen.':'Zuerst eine Mannschaft anlegen.';return;}
+  if(!state.disciplines.length) {
+    summaries.appendChild(el('p',{class:'hint',text:'Noch keine Disziplinen angelegt.'}));
+  }
+  for(const discipline of state.disciplines) {
+    const ranking=teamView.rankings.get(discipline.id);
+    summaries.appendChild(el('article',{class:'team-summary-card'},[
+      el('span',{text:discipline.name}),el('strong',{text:ranking?formatPoints(ranking.total_points):'–'}),
+      el('small',{text:ranking?`Platz ${ranking.rank} · ${ranking.counted_count}/${ranking.required_count} gewertet`:'Noch kein Durchgang markiert'})
+    ]));
+  }
+  ['Startnummer','Name',...state.disciplines.map(discipline=>discipline.name),'Aktionen'].forEach(label=>head.appendChild(el('th',{text:label})));
+  for(const member of selected.members) {
+    const cells=[el('td',{text:member.start_number}),el('td',{text:member.name})];
+    for(const discipline of state.disciplines) {
+      const ranking=teamView.rankings.get(discipline.id);
+      const entry=ranking?.entries.find(result=>result.shooter_id===member.shooter_id);
+      cells.push(entry ? el('td',{class:entry.counted?'team-score counted':'team-score dropped'},[
+        el('strong',{text:formatPoints(entry.points)}),el('small',{text:`D${entry.round_number} · ${entry.counted?'gewertet':'Streichergebnis'}`})
+      ]) : el('td',{class:'team-score missing'},[el('span',{text:'–'}),el('small',{text:'nicht markiert'})]));
+    }
+    cells.push(el('td',{class:'row-actions'},[
+      el('button',{type:'button',class:'link',text:'Ergebnisse',onclick:()=>{resultView.shooterId=member.shooter_id;document.getElementById('resultSearch').value='';activateTab('results');}}),
+      el('button',{type:'button',class:'link danger-text',text:'Entfernen',onclick:async()=>{if(!confirm(`${member.name} aus „${selected.name}“ entfernen?`))return;await teamMutation(`/api/teams/members/${member.shooter_id}`,{method:'DELETE'},`${member.name} wurde aus der Mannschaft entfernt.`);}})
+    ]));
+    body.appendChild(el('tr',{},cells));
+  }
+  if(!selected.members.length) body.appendChild(el('tr',{},[el('td',{colspan:String(state.disciplines.length+3),class:'hint',text:'Diese Mannschaft hat noch keine Mitglieder.'})]));
+}
+
+function renderTeamMemberPanel() {
+  const panel=document.getElementById('teamMemberPanel');
+  const selected=state.teams.find(team=>team.id===teamView.teamId);
+  panel.hidden=!teamView.addOpen || !selected;
+  if(panel.hidden)return;
+  const root=document.getElementById('availableTeamMembers');root.replaceChildren();
+  const query=document.getElementById('teamMemberSearch').value.trim().toLocaleLowerCase('de-DE');
   const membership=new Map();
   for(const team of state.teams) for(const member of team.members) membership.set(member.shooter_id,team);
-  const shooters=state.shooters.filter(shooter=>`${shooter.start_number} ${shooter.name}`.toLocaleLowerCase('de-DE').includes(query));
+  const shooters=state.shooters.filter(shooter=>membership.get(shooter.id)?.id!==selected.id && `${shooter.start_number} ${shooter.name}`.toLocaleLowerCase('de-DE').includes(query));
   for(const shooter of shooters) {
     const currentTeam=membership.get(shooter.id);
-    const select=el('select',{'aria-label':`Mannschaft für ${shooter.name}`},[
-      el('option',{value:'',text:'– keine Mannschaft –'}),
-      ...state.teams.map(team=>el('option',{value:team.id,text:team.name}))
-    ]);
-    select.value=currentTeam?.id || '';
-    select.disabled=teamView.busy;
-    select.addEventListener('change',async()=>{
-      const before=currentTeam?.id || '';
-      try {
-        if(select.value) await teamMutation(`/api/teams/${select.value}/members/${shooter.id}`,{method:'PUT'},`${shooter.name} wurde zugeordnet.`);
-        else await teamMutation(`/api/teams/members/${shooter.id}`,{method:'DELETE'},`${shooter.name} wurde aus der Mannschaft entfernt.`);
-      } catch(error) { select.value=before; }
-    });
-    rows.appendChild(el('tr',{},[el('td',{text:shooter.start_number}),el('td',{text:shooter.name}),el('td',{class:'current-team',text:currentTeam?.name || 'Nicht zugeordnet'}),el('td',{},[select])]));
+    const add=el('button',{type:'button',text:currentTeam?'Verschieben':'Hinzufügen',onclick:async()=>{
+      if(currentTeam && !confirm(`${shooter.name} aus „${currentTeam.name}“ nach „${selected.name}“ verschieben?`))return;
+      await teamMutation(`/api/teams/${selected.id}/members/${shooter.id}`,{method:'PUT'},`${shooter.name} wurde ${currentTeam?'verschoben':'hinzugefügt'}.`);
+    }});add.disabled=teamView.busy || selected.member_count>=state.event.team_max_members;
+    root.appendChild(el('div',{class:'available-team-member'},[
+      el('div',{},[el('strong',{text:`#${shooter.start_number} · ${shooter.name}`}),el('small',{text:currentTeam?`Derzeit: ${currentTeam.name}`:'Noch keiner Mannschaft zugeordnet'})]),add
+    ]));
   }
-  if(!shooters.length) rows.appendChild(el('tr',{},[el('td',{colspan:'4',class:'hint',text:state.shooters.length?'Keine Treffer.':'Noch keine Teilnehmer im Event.'})]));
+  if(!shooters.length) root.appendChild(el('p',{class:'hint',text:state.shooters.length?'Keine passenden Schützen verfügbar.':'Noch keine Teilnehmer im Event.'}));
 }
 
 async function teamMutation(path,options,message) {
@@ -573,15 +657,16 @@ async function teamMutation(path,options,message) {
   teamView.busy=true;document.getElementById('teamFeedback').textContent='Wird gespeichert …';
   try {await api(path,options);document.getElementById('teamFeedback').textContent=message;await loadTeams();}
   catch(error){document.getElementById('teamFeedback').textContent='Speichern fehlgeschlagen: '+error.message;throw error;}
-  finally{teamView.busy=false;renderTeamMembers();}
+  finally{teamView.busy=false;renderTeamMemberPanel();}
 }
 
 document.getElementById('teamForm').addEventListener('submit',async event=>{
   event.preventDefault();const input=document.getElementById('teamName');
-  try {await teamMutation('/api/teams',{method:'POST',body:JSON.stringify({name:input.value})},'Mannschaft angelegt.');input.value='';}
+  try {await teamMutation('/api/teams',{method:'POST',body:JSON.stringify({name:input.value})},'Mannschaft angelegt.');input.value='';document.getElementById('teamCreateDetails').open=false;}
   catch {}
 });
-document.getElementById('memberSearch').addEventListener('input',renderTeamMembers);
+document.getElementById('teamMemberSearch').addEventListener('input',renderTeamMemberPanel);
+document.getElementById('closeTeamMemberPanel').addEventListener('click',()=>{teamView.addOpen=false;renderTeamMemberPanel();});
 
 document.getElementById('teamSettingsForm').addEventListener('submit',async event=>{
   event.preventDefault();const status=document.getElementById('teamSettingsStatus');status.textContent='Wird gespeichert …';

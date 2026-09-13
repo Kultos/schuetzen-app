@@ -158,7 +158,13 @@ const Shooters = {
     run('INSERT INTO participants(event_id,shooter_id,start_number,name,gender) VALUES (?,?,?,?,?)',[current(),shooterId,startNumber,s.name,s.gender]);
     return this.findById(shooterId);
   },
-  create(data) { return transaction(()=>this.register(People.create(data).id,data.start_number)); },
+  create(data) {
+    return transaction(()=>{
+      const shooter=this.register(People.create(data).id,data.start_number);
+      if(data.team_id!==undefined && data.team_id!==null && data.team_id!=='') Teams.assign(positive(Number(data.team_id),'Mannschafts-ID'),shooter.id);
+      return shooter;
+    });
+  },
   update(id,data,{swapOnConflict=false}={}) {
     const s=this.findById(id); if(!s) fail('Teilnehmer nicht gefunden',404);
     const p=person(data); const n=data.start_number === undefined ? s.start_number : positive(data.start_number,'Startnummer');
@@ -171,6 +177,10 @@ const Shooters = {
       run('UPDATE participants SET name=?,gender=?,start_number=? WHERE id=?',[p.name,p.gender,n,s.participant_id]);
       People.update(id,p);
       if(conflict && conflict.id!==id) run('UPDATE participants SET start_number=? WHERE id=?',[s.start_number,conflict.participant_id]);
+      if(Object.hasOwn(data,'team_id')) {
+        if(data.team_id===null || data.team_id==='') Teams.unassign(id);
+        else Teams.assign(positive(Number(data.team_id),'Mannschafts-ID'),id);
+      }
       return this.findById(id);
     });
   },
