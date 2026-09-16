@@ -131,7 +131,7 @@ Vor jedem Wettkampf einen Restore in einem separaten Testdatenordner proben (`SC
 
 ## Datenablage und Tests
 
-- `data/wettkampf.db`: relationale Datenbank, Schema 3.
+- `data/wettkampf.db`: relationale Datenbank, Schema 6.
 - `data/backups/`: geprüfte Vollbackups und Begleitdateien.
 - `data/archive/`: verwaltete Eventexports.
 - `data/privacy-journal.json`: separates Datenschutzprotokoll.

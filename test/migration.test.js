@@ -86,7 +86,7 @@ test('Schema 2 wird mit Platzierungsbeziehungen, UUID-Aliasen und gemeinsamer We
     const code="const S=require('./storage'); console.log(JSON.stringify({version:S.get('PRAGMA user_version').user_version,aliases:S.get(\"SELECT COUNT(*) AS n FROM sqlite_master WHERE name='person_aliases'\").n,fks:S.all('PRAGMA foreign_key_list(placements)').length}));S.db.close();";
     const result=spawnSync(process.execPath,['-e',code],{cwd:path.join(__dirname,'..'),env:{...process.env,SCHUETZEN_DATA_DIR:dir},encoding:'utf8'});
     assert.equal(result.status,0,result.stderr);
-    assert.deepEqual(JSON.parse(result.stdout),{version:5,aliases:1,fks:5});
+    assert.deepEqual(JSON.parse(result.stdout),{version:6,aliases:1,fks:5});
     assert.equal(fs.readdirSync(path.join(dir,'backups')).filter(n=>n.endsWith('.sqlite')).length,1);
   } finally {fs.rmSync(dir,{recursive:true,force:true});}
 });
@@ -101,7 +101,7 @@ test('Schema 3 erhält beim Update die gemeinsame Wertung als sicheren Standard'
     const code="const S=require('./storage'); console.log(JSON.stringify({version:S.get('PRAGMA user_version').user_version,mode:S.get('SELECT ranking_mode FROM disciplines').ranking_mode}));S.db.close();";
     const result=spawnSync(process.execPath,['-e',code],{cwd:path.join(__dirname,'..'),env:{...process.env,SCHUETZEN_DATA_DIR:dir},encoding:'utf8'});
     assert.equal(result.status,0,result.stderr);
-    assert.deepEqual(JSON.parse(result.stdout),{version:5,mode:'combined'});
+    assert.deepEqual(JSON.parse(result.stdout),{version:6,mode:'combined'});
     assert.equal(fs.readdirSync(path.join(dir,'backups')).filter(n=>n.endsWith('.sqlite')).length,1);
   } finally {fs.rmSync(dir,{recursive:true,force:true});}
 });
@@ -122,7 +122,26 @@ test('Schema 4 erhält Mannschaftstabellen und bleibt standardmäßig eine Einze
     const code="const S=require('./storage'); const e=S.get('SELECT scoring_mode,team_max_members,team_counted_results FROM events'); console.log(JSON.stringify({version:S.get('PRAGMA user_version').user_version,event:e,teams:!!S.get(\"SELECT name FROM sqlite_master WHERE name='teams'\")}));S.db.close();";
     const result=spawnSync(process.execPath,['-e',code],{cwd:path.join(__dirname,'..'),env:{...process.env,SCHUETZEN_DATA_DIR:dir},encoding:'utf8'});
     assert.equal(result.status,0,result.stderr);
-    assert.deepEqual(JSON.parse(result.stdout),{version:5,event:{scoring_mode:'individual',team_max_members:5,team_counted_results:3},teams:true});
+    assert.deepEqual(JSON.parse(result.stdout),{version:6,event:{scoring_mode:'individual',team_max_members:5,team_counted_results:3},teams:true});
+    assert.equal(fs.readdirSync(path.join(dir,'backups')).filter(n=>n.endsWith('.sqlite')).length,1);
+  } finally {fs.rmSync(dir,{recursive:true,force:true});}
+});
+
+test('Schema 5 löst doppelte Durchgänge auf und schützt die Kombination dauerhaft',()=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'schuetzen-v5-'));
+  const file=path.join(dir,'wettkampf.db'),seed=new DatabaseSync(file);
+  seed.exec(`
+    CREATE TABLE results(id INTEGER PRIMARY KEY,event_id INTEGER,participant_id INTEGER,discipline_id INTEGER,round_number INTEGER,points REAL,created_at TEXT);
+    INSERT INTO results VALUES(1,1,1,1,1,90,'2026');
+    INSERT INTO results VALUES(2,1,1,1,1,91,'2026');
+    INSERT INTO results VALUES(3,1,1,1,3,92,'2026');
+    PRAGMA user_version=5;
+  `);seed.close();
+  try {
+    const code=`const S=require('./storage');const rounds=S.all('SELECT round_number FROM results ORDER BY id').map(r=>r.round_number);let duplicate=false;try{S.run("INSERT INTO results VALUES(4,1,1,1,1,93,'2026')")}catch{duplicate=true}console.log(JSON.stringify({version:S.get('PRAGMA user_version').user_version,rounds,duplicate}));S.db.close();`;
+    const result=spawnSync(process.execPath,['-e',code],{cwd:path.join(__dirname,'..'),env:{...process.env,SCHUETZEN_DATA_DIR:dir},encoding:'utf8'});
+    assert.equal(result.status,0,result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout),{version:6,rounds:[1,4,3],duplicate:true});
     assert.equal(fs.readdirSync(path.join(dir,'backups')).filter(n=>n.endsWith('.sqlite')).length,1);
   } finally {fs.rmSync(dir,{recursive:true,force:true});}
 });

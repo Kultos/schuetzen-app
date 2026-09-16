@@ -110,13 +110,18 @@ function assertCurrentEvent(req) {
 async function readEventBody(req) {const body=await readBody(req);assertCurrentEvent(req);return body;}
 
 function serveStatic(req, res, pathname) {
+  if (!['GET','HEAD'].includes(req.method)) {
+    res.setHeader('Allow','GET, HEAD');
+    return sendError(res, 405, 'Methode nicht erlaubt');
+  }
   let filePath = path.join(PUBLIC_DIR, pathname === '/' ? 'index.html' : pathname);
   if (!filePath.startsWith(PUBLIC_DIR + path.sep) && filePath !== path.join(PUBLIC_DIR,'index.html')) {
     return sendError(res, 403, 'Verboten');
   }
   fs.readFile(filePath, (err, content) => {
     if (err) {
-      // SPA fallback -> index.html
+      if (pathname !== '/dashboard') return sendError(res, 404, 'Nicht gefunden');
+      // The public TV view is the only client-side route.
       fs.readFile(path.join(PUBLIC_DIR, 'index.html'), (err2, fallback) => {
         if (err2) return sendError(res, 404, 'Nicht gefunden');
         res.writeHead(200, { 'Content-Type': MIME['.html'] });
@@ -168,14 +173,14 @@ async function handleApi(req, res, pathname, query) {
   }
   if(!Auth.protectedTransport(req)) return sendError(res,403,'Verwaltung im LAN erfordert HTTPS. Direkt am Server ist localhost verfügbar.');
   if(!Auth.session(req)) return sendError(res,401,'Bitte anmelden');
-  const eventWrite=method!=='GET' && (/^\/api\/(shooters|disciplines|results|teams)(\/|$)/.test(pathname) || pathname==='/api/team-settings' || pathname==='/api/import' || pathname==='/api/season' || pathname==='/api/season/reset' || /^\/api\/people\/\d+\/register$/.test(pathname));
+  const eventWrite=method!=='GET' && (/^\/api\/(shooters|disciplines|results|teams)(\/|$)/.test(pathname) || pathname==='/api/team-settings' || pathname==='/api/import' || pathname==='/api/season' || pathname==='/api/season/reset' || /^\/api\/people\/\d+(?:\/register)?$/.test(pathname));
   if(eventWrite) assertCurrentEvent(req);
   const reviewAllowed=['/api/backups','/api/backup/preview','/api/backup/restore','/api/privacy/review','/api/people'].includes(pathname) || /^\/api\/backups\//.test(pathname) || /^\/api\/people\/\d+(\/contact|\/consent-log|\/erase|\/history)?$/.test(pathname);
   if(setting('privacy_review')==='1' && !reviewAllowed) return sendError(res,423,'Datenschutzabgleich nach Restore erforderlich');
   let extra;
   if(pathname==='/api/people' && method==='GET') return sendJSON(res,200,People.list(query.search));
   if(pathname==='/api/people' && method==='POST') return sendJSON(res,201,People.create(await readBody(req)));
-  if((extra=pathname.match(/^\/api\/people\/(\d+)$/)) && method==='PUT') return sendJSON(res,200,People.update(Number(extra[1]),await readBody(req)));
+  if((extra=pathname.match(/^\/api\/people\/(\d+)$/)) && method==='PUT') return sendJSON(res,200,People.update(Number(extra[1]),await readEventBody(req)));
   if((extra=pathname.match(/^\/api\/people\/(\d+)\/history$/)) && method==='GET') return sendJSON(res,200,People.history(Number(extra[1])));
   if((extra=pathname.match(/^\/api\/people\/(\d+)\/register$/)) && method==='POST') {
     const b=await readEventBody(req);return sendJSON(res,201,Shooters.register(Number(extra[1]),b.start_number));
@@ -403,12 +408,6 @@ async function handleApi(req, res, pathname, query) {
   }
   if ((m = pathname.match(/^\/api\/team-rankings\/(\d+)$/)) && method === 'GET') {
     return sendJSON(res, 200, teamRankingForDiscipline(Number(m[1])));
-  }
-
-  // ---- Live-Dashboard (TV-Ansicht) ----
-  if (pathname === '/api/dashboard' && method === 'GET') {
-    res.setHeader('Cache-Control', 'no-store');
-    return sendJSON(res, 200, dashboardSnapshot());
   }
 
   // ---- Import ----

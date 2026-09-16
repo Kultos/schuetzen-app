@@ -284,12 +284,18 @@ const Results = {
     const s=Shooters.findById(shooter_id);
     if(!s || !Disciplines.findById(discipline_id)) fail('Teilnehmer oder Disziplin gehört nicht zum aktiven Event');
     positive(round_number,'Durchgang'); if(typeof points!=='number' || !Number.isFinite(points)) fail('Punkte sind ungültig');
+    if(get('SELECT 1 FROM results WHERE event_id=? AND participant_id=? AND discipline_id=? AND round_number=?',[current(),s.participant_id,discipline_id,round_number])) {
+      fail('Dieser Durchgang ist bereits erfasst',409);
+    }
     const id=Number(run('INSERT INTO results(event_id,participant_id,discipline_id,round_number,points) VALUES (?,?,?,?,?)',[current(),s.participant_id,discipline_id,round_number,points]).lastInsertRowid);
     return this.findById(id);
   },
   update(id,{points,round_number}) {
-    if(!this.findById(id)) fail('Ergebnis nicht gefunden',404);
+    const result=this.findById(id);if(!result) fail('Ergebnis nicht gefunden',404);
     positive(round_number,'Durchgang'); if(typeof points!=='number' || !Number.isFinite(points)) fail('Punkte sind ungültig');
+    if(get('SELECT 1 FROM results WHERE event_id=? AND participant_id=? AND discipline_id=? AND round_number=? AND id<>?',[current(),result.participant_id,result.discipline_id,round_number,id])) {
+      fail('Dieser Durchgang ist bereits erfasst',409);
+    }
     run('UPDATE results SET points=?,round_number=? WHERE id=?',[points,round_number,id]); return this.findById(id);
   },
   remove(id) { if(!this.findById(id)) fail('Ergebnis nicht gefunden',404); run('DELETE FROM results WHERE id=?',[id]); },

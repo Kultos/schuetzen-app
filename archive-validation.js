@@ -76,6 +76,7 @@ function validateSeasonArchive(data) {
   });
 
   const resultIds = new Set();
+  const resultRounds = new Set();
   const results = data.results.map((item, index) => {
     if (!item || typeof item !== 'object') throw new Error(`Ergebnis ${index + 1} ist ungültig`);
     const id = validateId(item.id, `Ergebnis ${index + 1}: ID`);
@@ -88,6 +89,9 @@ function validateSeasonArchive(data) {
     if (!Number.isSafeInteger(item.round_number) || item.round_number < 1) {
       throw new Error(`Ergebnis ${index + 1}: Durchgang ist ungültig`);
     }
+    const roundKey = `${shooter_id}:${discipline_id}:${item.round_number}`;
+    if (resultRounds.has(roundKey)) throw new Error(`Ergebnis ${index + 1}: Durchgang kommt mehrfach vor`);
+    resultRounds.add(roundKey);
     if (typeof item.points !== 'number' || !Number.isFinite(item.points)) {
       throw new Error(`Ergebnis ${index + 1}: Punkte sind ungültig`);
     }

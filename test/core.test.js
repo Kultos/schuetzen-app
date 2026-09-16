@@ -377,12 +377,23 @@ test('API validiert Eingaben und meldet fehlende oder doppelte Datensätze einde
   assert.equal(first.response.status, 201);
   assert.equal(second.body.round_number, 2);
 
+  result = await api('/api/results', {
+    method: 'POST',
+    json: { shooter_id: shooter.id, discipline_id: discipline.id, points: 97, round_number: 2 },
+  });
+  assert.equal(result.response.status, 409);
+
   result = await api(`/api/results/${first.body.id}`, {
     method: 'PUT',
     json: { points: 99.5, round_number: 3 },
   });
   assert.equal(result.response.status, 200);
   assert.equal(result.body.points, 99.5);
+  result = await api(`/api/results/${first.body.id}`, {
+    method: 'PUT',
+    json: { points: 99.5, round_number: 2 },
+  });
+  assert.equal(result.response.status, 409);
 
   result = await api('/api/results/999999', { method: 'DELETE' });
   assert.equal(result.response.status, 404);
@@ -523,6 +534,12 @@ test('Saisonarchiv-Validierung weist beschädigte JSON-Daten zurück', async (t)
     ['ungültiger Durchgang', archiveFixture({
       results: [{ ...archiveFixture().results[0], round_number: 0 }],
     }), /Durchgang/],
+    ['doppelter Durchgang', archiveFixture({
+      results: [
+        archiveFixture().results[0],
+        { ...archiveFixture().results[0], id: 12, points: 97 },
+      ],
+    }), /Durchgang.*mehrfach/],
     ['ungültige Punkte', archiveFixture({
       results: [{ ...archiveFixture().results[0], points: '98' }],
     }), /Punkte/],
@@ -754,6 +771,9 @@ test('Anmeldung, CSRF-Schutz und veralteter Eventkontext werden serverseitig gep
   for(let i=0;i<5;i++)assert.throws(()=>Auth.login(blockedRequest,{setHeader(){}},'falsch'),/Anmeldung fehlgeschlagen/);
   assert.throws(()=>Auth.login(blockedRequest,{setHeader(){}},'test-password-12345'),/Zu viele Versuche/);
   const page=await fetch(baseUrl+'/');assert.match(page.headers.get('content-security-policy'),/default-src 'self'/);
+  assert.equal((await fetch(baseUrl+'/dashboard')).status,200);
+  assert.equal((await fetch(baseUrl+'/missing-script.js')).status,404);
+  assert.equal((await fetch(baseUrl+'/',{method:'POST'})).status,405);
   const appSource=await (await fetch(baseUrl+'/app.js')).text();assert.match(appSource,/script\.integrity = 'sha512-/);
   await api('/api/auth/logout',{method:'POST',json:{}});
   assert.equal((await fetch(baseUrl+'/api/people',{headers:{Cookie:cookie}})).status,401);
@@ -773,6 +793,23 @@ test('Ein während des Body-Uploads gewechseltes Event weist den alten Request z
   const response=await responsePromise;
   assert.equal(response.status,409,response.body);
   assert.equal(People.list('Darf nicht landen').length,0);
+});
+
+test('Eine verzögerte Stammdatenänderung darf kein inzwischen gewechseltes Event verändern',async()=>{
+  const person=Shooters.create({name:'Person Alt',gender:'w'}),old=Events.active();
+  const payload=JSON.stringify({name:'Person Veraltet',gender:'w'}),url=new URL(baseUrl+'/api/people/'+person.id);
+  let request;
+  const responsePromise=new Promise((resolve,reject)=>{
+    request=http.request(url,{method:'PUT',headers:{Cookie:cookie,'X-Schuetzen-Request':'1','X-Event-Id':String(old.id),'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload)}},response=>{
+      let body='';response.on('data',chunk=>body+=chunk);response.on('end',()=>resolve({status:response.statusCode,body}));
+    });request.on('error',reject);request.write(payload.slice(0,1));
+  });
+  await new Promise(resolve=>setTimeout(resolve,40));
+  Events.start({title:'Nächstes Event',year:2027,previous_event_id:old.id});
+  request.end(payload.slice(1));
+  const response=await responsePromise;
+  assert.equal(response.status,409,response.body);
+  assert.equal(People.get(person.id).name,'Person Alt');
 });
 
 test('Fehlerhafte Tabellenimport-Zeilen hinterlassen keine persistenten Teilobjekte',async()=>{

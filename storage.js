@@ -44,7 +44,7 @@ function snapshot(label) {
   return name;
 }
 
-const CURRENT_SCHEMA_VERSION = 5;
+const CURRENT_SCHEMA_VERSION = 6;
 const SCHEMA = `
 CREATE TABLE shooters (
  id INTEGER PRIMARY KEY AUTOINCREMENT, uuid TEXT NOT NULL UNIQUE,
@@ -84,6 +84,7 @@ CREATE TABLE results (
  FOREIGN KEY(discipline_id,event_id) REFERENCES disciplines(id,event_id) ON DELETE CASCADE
 );
 CREATE INDEX results_participant_discipline ON results(participant_id,discipline_id);
+CREATE UNIQUE INDEX results_round_number ON results(event_id,participant_id,discipline_id,round_number);
 CREATE UNIQUE INDEX results_team_selection_key ON results(id,event_id,participant_id,discipline_id);
 CREATE TABLE teams (
  id INTEGER PRIMARY KEY AUTOINCREMENT, event_id INTEGER NOT NULL REFERENCES events(id),
@@ -140,7 +141,7 @@ CREATE TABLE consent_log (
 CREATE TABLE imports (fingerprint TEXT PRIMARY KEY, event_id INTEGER NOT NULL REFERENCES events(id));
 CREATE TABLE person_aliases (uuid TEXT PRIMARY KEY, shooter_id INTEGER NOT NULL REFERENCES shooters(id));
 CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-PRAGMA user_version = 5;
+PRAGMA user_version = 6;
 `;
 
 const version = get('PRAGMA user_version').user_version;
@@ -247,6 +248,32 @@ if (get('PRAGMA user_version').user_version === 4) {
     `);
     checkDatabase(db);
   });
+  }
+}
+if (get('PRAGMA user_version').user_version === 5) {
+  if (version === 5) snapshot('vor-migration-v6');
+  const hasResults = !!get("SELECT name FROM sqlite_master WHERE type='table' AND name='results'");
+  if (!hasResults) {
+    db.exec('PRAGMA user_version = 6;');
+  } else {
+    transaction(() => {
+      const groups=all(`SELECT event_id,participant_id,discipline_id,MAX(round_number) AS max_round
+        FROM results GROUP BY event_id,participant_id,discipline_id
+        HAVING COUNT(*)<>COUNT(DISTINCT round_number)`);
+      for(const group of groups) {
+        const rows=all(`SELECT id,round_number FROM results
+          WHERE event_id=? AND participant_id=? AND discipline_id=? ORDER BY round_number,id`,
+          [group.event_id,group.participant_id,group.discipline_id]);
+        const used=new Set();let next=group.max_round;
+        for(const row of rows) {
+          if(!used.has(row.round_number)) {used.add(row.round_number);continue;}
+          do {next++;} while(used.has(next));
+          run('UPDATE results SET round_number=? WHERE id=?',[next,row.id]);used.add(next);
+        }
+      }
+      db.exec('CREATE UNIQUE INDEX results_round_number ON results(event_id,participant_id,discipline_id,round_number); PRAGMA user_version = 6;');
+      checkDatabase(db);
+    });
   }
 }
 
