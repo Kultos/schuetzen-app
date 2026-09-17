@@ -35,7 +35,7 @@ function renderResultShooters() {
   }
   resultElement('resultSearchCount').textContent = matches.length
     ? `${matches.length} Schützen gefunden`
-    : state.shooters.length ? 'Keine Treffer. Name oder Startnummer prüfen.' : 'Noch keine Teilnehmer im aktuellen Event.';
+    : state.shooters.length ? 'Keine Treffer. Name oder Startnummer prüfen.' : 'Noch keine Teilnehmer in der aktuellen Veranstaltung.';
 }
 
 function resultLoading(message) {
@@ -120,7 +120,7 @@ function renderResultDisciplines() {
     for (const row of rows) {
       const selectedForTeam = Boolean(row.team_selected);
       const teamSelect = teamsEnabled && team ? el('button', {
-        type: 'button', class: `team-select${selectedForTeam ? ' active' : ''}`, text: selectedForTeam ? '✓ Für Team gewertet' : 'Für Team werten',
+        type: 'button', class: `team-select${selectedForTeam ? ' active' : ''}`, text: selectedForTeam ? '✓ Für Mannschaft ausgewählt' : 'Für Mannschaft auswählen',
         'aria-pressed': String(selectedForTeam),
         title: selectedForTeam ? 'Aus Mannschaftswertung entfernen' : 'Diesen Durchgang für die Mannschaft auswählen',
         onclick: () => {
@@ -133,9 +133,9 @@ function renderResultDisciplines() {
       const remove = el('button', {
         type: 'button', class: 'link danger-text', text: '×',
         'aria-label': `${discipline.name}: Durchgang ${row.round_number} mit ${formatPoints(row.points)} Punkten löschen`,
-        onclick: () => {
+        onclick: async () => {
           if (resultView.busy) return;
-          if (!confirm(`${shooter.name} · ${discipline.name}: Durchgang ${row.round_number} (${formatPoints(row.points)} Punkte) löschen?`)) return;
+          if (!await confirmAction('Durchgang löschen', `${shooter.name} · ${discipline.name}: Durchgang ${row.round_number} mit ${formatPoints(row.points)} Punkten endgültig löschen?`, 'Durchgang löschen', true)) return;
           mutateResult(`/api/results/${row.id}`, { method: 'DELETE' }, `${shooter.name} · ${discipline.name}: Durchgang gelöscht.`);
         },
       });
@@ -148,7 +148,7 @@ function renderResultDisciplines() {
     details.appendChild(rounds);
     const score = el('div', { class: 'result-best', text: best === null ? '–' : formatPoints(best) }, [el('small', { text: 'Bestwert · Punkte' })]);
     const key = `${state.eventId}:${shooter.id}:${discipline.id}`;
-    const add = el('button', { type: 'button', id: `result-add-${discipline.id}`, text: rows.length ? '+ Durchgang' : '+ Erfassen', 'aria-expanded': String(resultView.drafts.has(key)) });
+    const add = el('button', { type: 'button', id: `result-add-${discipline.id}`, text: '+ Durchgang erfassen', 'aria-expanded': String(resultView.drafts.has(key)) });
     add.disabled = resultView.busy;
     card.appendChild(el('div', { class: 'result-discipline-main' }, [details, score, add]));
     const openEntry = () => {

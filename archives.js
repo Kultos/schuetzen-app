@@ -40,7 +40,7 @@ function validateSeasonArchive(data) {
   clean.archive_version=data.version || 1;
   if([2,3,4,5].includes(data.version)) {
     const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if(!data.event || !uuid.test(data.event.uuid) || !['active','closed','correction'].includes(data.event.status) || data.event.ranking_version!=='series-name-v1') fail('Ungültige Event-Metadaten oder unbekannte Wertung');
+    if(!data.event || !uuid.test(data.event.uuid) || !['active','closed','correction'].includes(data.event.status) || data.event.ranking_version!=='series-name-v1') fail('Ungültige Veranstaltungsdaten oder unbekannte Wertung');
     if(data.event.year!==null && (!Number.isInteger(data.event.year) || data.event.year<1900 || data.event.year>2200)) fail('Eventjahr ist ungültig');
     if(!Number.isSafeInteger(data.event.revision) || data.event.revision<0 || (['closed','correction'].includes(data.event.status) && data.event.revision<1)) fail('Eventrevision ist ungültig');
     if(![0,1].includes(data.event.reconstructed)) fail('Rekonstruktionskennzeichen ist ungültig');
@@ -97,7 +97,7 @@ function validateSeasonArchive(data) {
         });
       }
     } else if(clean.placements.length) {
-      fail('Ein noch nicht abgeschlossenes Event darf keine Abschlusswertung enthalten');
+      fail('Eine noch nicht abgeschlossene Veranstaltung darf keine Abschlusswertung enthalten');
     }
     if(data.version>=3) {
       if(!Array.isArray(data.placement_history)||!Array.isArray(data.closures)) fail('Versionshistorie fehlt');
@@ -110,7 +110,7 @@ function validateSeasonArchive(data) {
         return {revision:c.revision,reason:c.reason.trim(),created_at:c.created_at};
       });
       const expectedRevisions=Array.from({length:clean.event.revision},(_,i)=>i+1);
-      if(clean.event.status==='active' && (clean.event.revision!==0||clean.closures.length||clean.placement_history.length)) fail('Aktives Event enthält eine Abschlussversion');
+      if(clean.event.status==='active' && (clean.event.revision!==0||clean.closures.length||clean.placement_history.length)) fail('Aktive Veranstaltung enthält eine Abschlussversion');
       if(clean.event.status!=='active' && JSON.stringify(clean.closures.map(c=>c.revision).sort((a,b)=>a-b))!==JSON.stringify(expectedRevisions)) fail('Abschlussprotokoll ist unvollständig');
       const historyKeys=new Set(),groups=new Set(clean.results.map(r=>r.shooter_id+':'+r.discipline_id));
       for(const p of clean.placement_history) {
@@ -173,7 +173,7 @@ function validateSeasonArchive(data) {
       if(clean.event.status==='closed') {
         const current=clean.team_placement_history.filter(row=>row.revision===clean.event.revision);
         if(JSON.stringify(clean.team_placements)!==JSON.stringify(current.map(({revision,...row})=>row))) fail('Letzte Mannschaftswertung widerspricht der Versionshistorie');
-      } else if(clean.team_placements.length) fail('Ein noch nicht abgeschlossenes Event darf keine Mannschaftsplatzierung enthalten');
+      } else if(clean.team_placements.length) fail('Eine noch nicht abgeschlossene Veranstaltung darf keine Mannschaftsplatzierung enthalten');
     } else {
       clean.teams=[];clean.team_selections=[];clean.team_placements=[];clean.team_placement_history=[];
     }
@@ -184,7 +184,7 @@ function fingerprint(a) {return createHash('sha256').update(JSON.stringify(a)).d
 function preview(data) {
   const a=validateSeasonArchive(data), hash=fingerprint(a);
   const existing=get('SELECT event_id FROM imports WHERE fingerprint=?',[hash]);
-  if(existing || (a.event && get('SELECT id FROM events WHERE uuid=?',[a.event.uuid]))) fail('Dieses Event wurde bereits importiert oder ist bereits vorhanden',409);
+  if(existing || (a.event && get('SELECT id FROM events WHERE uuid=?',[a.event.uuid]))) fail('Diese Veranstaltung wurde bereits importiert oder ist bereits vorhanden',409);
   const privacy=require('./privacy');
   return {fingerprint:hash,year:a.event?.year || null,title:a.event_title,
     shooters:a.shooters.map(s=>{

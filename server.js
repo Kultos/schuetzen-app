@@ -104,7 +104,7 @@ function readBody(req) {
 }
 function assertCurrentEvent(req) {
   if(Number(req.headers['x-event-id'])!==Events.active().id) {
-    const error=new Error('Das aktive Event hat sich geändert. Bitte die Seite neu laden.');error.status=409;throw error;
+    const error=new Error('Die aktive Veranstaltung hat sich geändert. Bitte die Seite neu laden.');error.status=409;throw error;
   }
 }
 async function readEventBody(req) {const body=await readBody(req);assertCurrentEvent(req);return body;}
@@ -183,7 +183,16 @@ async function handleApi(req, res, pathname, query) {
   if((extra=pathname.match(/^\/api\/people\/(\d+)$/)) && method==='PUT') return sendJSON(res,200,People.update(Number(extra[1]),await readEventBody(req)));
   if((extra=pathname.match(/^\/api\/people\/(\d+)\/history$/)) && method==='GET') return sendJSON(res,200,People.history(Number(extra[1])));
   if((extra=pathname.match(/^\/api\/people\/(\d+)\/register$/)) && method==='POST') {
-    const b=await readEventBody(req);return sendJSON(res,201,Shooters.register(Number(extra[1]),b.start_number));
+    const b=await readEventBody(req);
+    const startNumber=parsePositiveInteger(b.start_number);
+    if(!startNumber)return sendError(res,400,'start_number muss eine positive ganze Zahl sein');
+    const teamId=b.team_id===undefined || b.team_id===null || b.team_id==='' ? null : parsePositiveInteger(b.team_id);
+    if(b.team_id!==undefined && b.team_id!==null && b.team_id!=='' && !teamId)return sendError(res,400,'team_id muss eine positive ganze Zahl sein');
+    const conflict=Shooters.findByStartNumber(startNumber);
+    if(conflict)return sendError(res,409,`Startnummer ${startNumber} ist bereits vergeben`,{
+      code:'START_NUMBER_CONFLICT',conflicting_shooter:conflict,suggested_start_number:Shooters.nextStartNumber()
+    });
+    return sendJSON(res,201,Shooters.registerWithTeam(Number(extra[1]),startNumber,teamId));
   }
   if((extra=pathname.match(/^\/api\/people\/(\d+)\/archive$/)) && method==='POST') {
     const b=await readBody(req);People.archive(Number(extra[1]),b.archived===true);return sendJSON(res,200,{ok:true});
@@ -436,7 +445,7 @@ async function handleApi(req, res, pathname, query) {
           let shooter = number ? Shooters.findByStartNumber(number) : Shooters.findByName(name);
           if(shooter && shooter.name.toLocaleLowerCase('de')!==name.toLocaleLowerCase('de')) throw new Error('Startnummer gehört zu einem anderen Teilnehmer');
           if (!shooter) {
-            if(People.list(name).some(p=>p.name.toLocaleLowerCase('de')===name.toLocaleLowerCase('de'))) throw new Error('Name ist im Schützenstamm vorhanden. Person zuerst ausdrücklich für das Event anmelden.');
+            if(People.list(name).some(p=>p.name.toLocaleLowerCase('de')===name.toLocaleLowerCase('de'))) throw new Error('Name ist im Schützenstamm vorhanden. Person zuerst ausdrücklich für die Veranstaltung anmelden.');
             const requestedStartNumber = String(row.start_number ?? '').trim() ? parsePositiveInteger(row.start_number) : Shooters.nextStartNumber();
             if (!requestedStartNumber) throw new Error('Startnummer ist ungültig');
             const conflict = Shooters.findByStartNumber(requestedStartNumber);

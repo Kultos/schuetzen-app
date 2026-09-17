@@ -18,8 +18,8 @@ function person(data) {
 const Events = {
   active() { return get("SELECT * FROM events WHERE status='active'"); },
   list() { return all('SELECT * FROM events ORDER BY year DESC,id DESC'); },
-  get(id) { const e=get('SELECT * FROM events WHERE id=?',[id]); if(!e) fail('Event nicht gefunden',404); return e; },
-  writable(id) { const e=this.get(id); if(!['active','correction'].includes(e.status)) fail('Abgeschlossenes Event ist schreibgeschützt',409); return e; },
+  get(id) { const e=get('SELECT * FROM events WHERE id=?',[id]); if(!e) fail('Veranstaltung nicht gefunden',404); return e; },
+  writable(id) { const e=this.get(id); if(!['active','correction'].includes(e.status)) fail('Abgeschlossene Veranstaltung ist schreibgeschützt',409); return e; },
   metadata(id, data) {
     this.writable(id);
     const title=String(data.title || '').trim();
@@ -42,7 +42,7 @@ const Events = {
     run('UPDATE events SET scoring_mode=?,team_max_members=?,team_counted_results=? WHERE id=?',[scoringMode,maxMembers,countedResults,id]);
     return this.get(id);
   },
-  close(id, reason='Eventabschluss') {
+  close(id, reason='Veranstaltungsabschluss') {
     const e=this.writable(id);
     if(!e.year) fail('Bitte zuerst das Veranstaltungsjahr festlegen');
     const revision=e.revision+1;
@@ -63,10 +63,10 @@ const Events = {
   },
   start({ title, year, previous_event_id }) {
     const old=this.active();
-    if(!old || old.id !== previous_event_id) fail('Das aktive Event hat sich geändert. Bitte Ansicht aktualisieren.',409);
+    if(!old || old.id !== previous_event_id) fail('Die aktive Veranstaltung hat sich geändert. Bitte Ansicht aktualisieren.',409);
     const y=Number(year);
-    if(!String(title || '').trim() || String(title).length>200 || !Number.isInteger(y) || y<1900 || y>2200) fail('Titel und gültiges Jahr für das neue Event erforderlich');
-    if(!old.year) fail('Bitte das Jahr des bisherigen Events speichern');
+    if(!String(title || '').trim() || String(title).length>200 || !Number.isInteger(y) || y<1900 || y>2200) fail('Titel und gültiges Jahr für die neue Veranstaltung erforderlich');
+    if(!old.year) fail('Bitte das Jahr der bisherigen Veranstaltung speichern');
     const backup=require('./backups').create('vor-eventwechsel');
     const next=transaction(()=>{
       this.close(old.id);
@@ -74,13 +74,13 @@ const Events = {
       return this.get(id);
     });
     const warnings=[]; let archive=null;
-    try { archive=require('./archives').archiveCurrentSeason(undefined,old.id); } catch { warnings.push('Event geschlossen; Event-Export fehlgeschlagen. Erneut exportieren.'); }
+    try { archive=require('./archives').archiveCurrentSeason(undefined,old.id); } catch { warnings.push('Veranstaltung geschlossen; Veranstaltungsexport fehlgeschlagen. Erneut exportieren.'); }
     try { require('./backups').create('nach-eventwechsel'); } catch { warnings.push('Abschlusssicherung fehlgeschlagen. Bitte Vollbackup erneut erstellen.'); }
     return { ok:true, event:next, backup, archive:archive ? require('node:path').basename(archive) : null, warnings };
   },
   beginCorrection(id, reason) {
     const e=this.get(id);
-    if(e.status!=='closed' || typeof reason!=='string' || !reason.trim() || reason.length>500) fail('Abgeschlossenes Event und Korrekturbegründung erforderlich');
+    if(e.status!=='closed' || typeof reason!=='string' || !reason.trim() || reason.length>500) fail('Abgeschlossene Veranstaltung und Korrekturbegründung erforderlich');
     require('./backups').create('vor-korrektur');
     run("UPDATE events SET status='correction',correction_reason=? WHERE id=?",[reason.trim(),id]);
     return this.get(id);
@@ -91,7 +91,7 @@ const Events = {
     transaction(()=>this.close(id,e.correction_reason));
     const warnings=[];
     try { require('./archives').archiveCurrentSeason(undefined,id); }
-    catch { warnings.push('Korrektur gespeichert; Event-Export fehlgeschlagen.'); }
+    catch { warnings.push('Korrektur gespeichert; Veranstaltungsexport fehlgeschlagen.'); }
     try { require('./backups').create('nach-korrektur'); }
     catch { warnings.push('Korrektur gespeichert; Abschlusssicherung fehlgeschlagen.'); }
     return {...this.get(id),warnings};
@@ -159,10 +159,17 @@ const Shooters = {
     const s=People.get(positive(shooterId,'Schützen-ID')); Events.writable(current());
     if(s.archived_at) fail('Archivierten Schützen zuerst reaktivieren');
     positive(startNumber,'Startnummer');
-    if(this.findById(shooterId)) fail('Schütze ist bereits für dieses Event angemeldet',409);
+    if(this.findById(shooterId)) fail('Schütze ist bereits für diese Veranstaltung angemeldet',409);
     if(this.findByStartNumber(startNumber)) fail('Startnummer ist bereits vergeben',409);
     run('INSERT INTO participants(event_id,shooter_id,start_number,name,gender) VALUES (?,?,?,?,?)',[current(),shooterId,startNumber,s.name,s.gender]);
     return this.findById(shooterId);
+  },
+  registerWithTeam(shooterId, startNumber=this.nextStartNumber(), teamId=null) {
+    return transaction(()=>{
+      const shooter=this.register(shooterId,startNumber);
+      if(teamId!==null && teamId!==undefined && teamId!=='') Teams.assign(positive(Number(teamId),'Mannschafts-ID'),shooter.id);
+      return shooter;
+    });
   },
   create(data) {
     return transaction(()=>{
@@ -254,7 +261,7 @@ const Teams = {
     const event=Events.writable(current());
     const team=this.findById(teamId);
     const shooter=Shooters.findById(shooterId);
-    if(!team || !shooter) fail('Mannschaft oder Teilnehmer gehört nicht zum aktiven Event');
+    if(!team || !shooter) fail('Mannschaft oder Teilnehmer gehört nicht zur aktiven Veranstaltung');
     const existing=get('SELECT team_id FROM team_memberships WHERE event_id=? AND participant_id=?',[current(),shooter.participant_id]);
     if(existing?.team_id===teamId) return team;
     const count=get('SELECT COUNT(*) AS n FROM team_memberships WHERE team_id=?',[teamId]).n;
@@ -282,7 +289,7 @@ const Results = {
   findById(id) { return get(resultSelect+' WHERE r.id=? AND r.event_id=?',[id,current()]); },
   create({shooter_id,discipline_id,round_number,points}) {
     const s=Shooters.findById(shooter_id);
-    if(!s || !Disciplines.findById(discipline_id)) fail('Teilnehmer oder Disziplin gehört nicht zum aktiven Event');
+    if(!s || !Disciplines.findById(discipline_id)) fail('Teilnehmer oder Disziplin gehört nicht zur aktiven Veranstaltung');
     positive(round_number,'Durchgang'); if(typeof points!=='number' || !Number.isFinite(points)) fail('Punkte sind ungültig');
     if(get('SELECT 1 FROM results WHERE event_id=? AND participant_id=? AND discipline_id=? AND round_number=?',[current(),s.participant_id,discipline_id,round_number])) {
       fail('Dieser Durchgang ist bereits erfasst',409);
@@ -412,7 +419,7 @@ function dashboardSnapshot() {
   const event=Events.active();
   const disciplines=Disciplines.list().map(d=>({...d,ranking:rankingForDiscipline(d.id),team_ranking:teamRankingForDiscipline(d.id)}));
   return {event_title:Season.getTitle(),scoring_mode:event.scoring_mode,updated_at:new Date().toISOString(),
-    stats:{shooters:Shooters.list().length,disciplines:disciplines.length,results:get('SELECT COUNT(*) AS n FROM results WHERE event_id=?',[current()]).n},
+    stats:{shooters:Shooters.list().length,teams:Teams.list().length,disciplines:disciplines.length,results:get('SELECT COUNT(*) AS n FROM results WHERE event_id=?',[current()]).n},
     disciplines, latest_results:all(`SELECT r.id,r.points,r.round_number,r.created_at,p.name AS shooter_name,p.start_number,d.id AS discipline_id,d.name AS discipline_name
       FROM results r JOIN participants p ON p.id=r.participant_id JOIN disciplines d ON d.id=r.discipline_id WHERE r.event_id=? ORDER BY r.id DESC LIMIT 10`,[current()])};
 }

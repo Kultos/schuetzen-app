@@ -67,7 +67,7 @@ function inspect(bundleData, consume) {
       const columns=connectionColumns(source,table), expected=connectionColumns(db,table);
       if(JSON.stringify(columns)!==JSON.stringify(expected)) invalid('Backup-Schema weicht ab');
     }
-    if(source.prepare("SELECT COUNT(*) AS n FROM events WHERE status='active'").get().n!==1) invalid('Backup hat kein eindeutiges aktives Event');
+    if(source.prepare("SELECT COUNT(*) AS n FROM events WHERE status='active'").get().n!==1) invalid('Backup hat keine eindeutige aktive Veranstaltung');
     const summary={events:source.prepare('SELECT COUNT(*) AS n FROM events').get().n,shooters:source.prepare('SELECT COUNT(*) AS n FROM shooters').get().n,results:source.prepare('SELECT COUNT(*) AS n FROM results').get().n};
     return consume ? consume(source,summary) : summary;
   } finally { if(source) source.close(); fs.unlinkSync(temp); }

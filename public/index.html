@@ -17,23 +17,59 @@
   <header class="topbar">
     <div class="brand">
       <img id="clubLogo" src="/logo.png" alt="">
-      <h1>Schützen-Wettkampf Auswertung</h1>
+      <div>
+        <h1>Schützen-Wettkampf Auswertung</h1>
+        <p id="activeEventLabel" class="active-event-label">Veranstaltung wird geladen …</p>
+      </div>
+      <div class="topbar-actions">
+        <a href="/dashboard" target="_blank" class="header-action">Live-Anzeige öffnen</a>
+        <button id="logoutBtn" class="header-action">Abmelden</button>
+      </div>
     </div>
-    <nav class="tabs">
-      <button data-tab="dashboard" class="tab">Live-Dashboard</button>
-      <button data-tab="shooters" class="tab active">Schützen</button>
-      <button data-tab="teams" class="tab">Mannschaften</button>
-      <button data-tab="people" class="tab">Schützenstamm &amp; Historie</button>
-      <button data-tab="disciplines" class="tab">Disziplinen</button>
-      <button data-tab="results" class="tab">Ergebnisse erfassen</button>
-      <button data-tab="rankings" class="tab">Ranglisten</button>
-      <button data-tab="import" class="tab">Import</button>
-      <button data-tab="season" class="tab">Saison &amp; Netzwerk</button>
-      <button id="logoutBtn" class="tab">Abmelden</button>
+    <nav class="navigation" aria-label="Verwaltungsbereiche">
+      <div class="nav-group"><span>Wettkampf</span><div class="tabs">
+        <button data-tab="overview" class="tab active">Übersicht</button>
+        <button data-tab="shooters" class="tab">Teilnehmer</button>
+        <button data-tab="teams" class="tab">Mannschaften</button>
+        <button data-tab="results" class="tab">Ergebnisse</button>
+        <button data-tab="rankings" class="tab">Ranglisten</button>
+      </div></div>
+      <div class="nav-group"><span>Personen</span><div class="tabs">
+        <button data-tab="people" class="tab">Schützenstamm</button>
+        <button data-tab="invitations" class="tab">Einladungen</button>
+      </div></div>
+      <div class="nav-group"><span>Verwaltung</span><div class="tabs">
+        <button data-tab="disciplines" class="tab">Veranstaltung &amp; Disziplinen</button>
+        <button data-tab="history" class="tab">Veranstaltungshistorie</button>
+        <button data-tab="import" class="tab">Import / Export</button>
+        <button data-tab="backup" class="tab">Datensicherung</button>
+        <button data-tab="network" class="tab">Netzwerk</button>
+      </div></div>
     </nav>
   </header>
 
   <main>
+    <section id="tab-overview" class="panel active">
+      <header class="overview-header">
+        <div><p class="eyebrow">Aktive Veranstaltung</p><h2 id="overviewEventTitle">Veranstaltung</h2><p id="overviewEventMeta" class="hint"></p></div>
+        <button type="button" data-go-tab="disciplines" class="secondary">Veranstaltung einrichten</button>
+      </header>
+      <div class="overview-stats" aria-label="Stand der Veranstaltung">
+        <article><strong id="overviewShooterCount">0</strong><span>Teilnehmer</span></article>
+        <article><strong id="overviewTeamCount">0</strong><span>Mannschaften</span></article>
+        <article><strong id="overviewDisciplineCount">0</strong><span>Disziplinen</span></article>
+        <article><strong id="overviewResultCount">0</strong><span>Ergebnisse</span></article>
+      </div>
+      <div id="overviewGuidance" class="overview-guidance" role="status"></div>
+      <div class="quick-actions" aria-label="Häufige Aufgaben">
+        <button type="button" data-go-tab="shooters">Teilnehmer anmelden</button>
+        <button type="button" data-go-tab="results">Ergebnis erfassen</button>
+        <button type="button" data-go-tab="rankings">Ranglisten ansehen</button>
+        <a href="/dashboard" target="_blank" class="button-link secondary">Live-Anzeige öffnen</a>
+      </div>
+      <p class="hint">„Noch kein Ergebnis“ beschreibt nur den aktuellen Datenstand und keine Schießpflicht.</p>
+    </section>
+
     <!-- LIVE-DASHBOARD -->
     <section id="tab-dashboard" class="panel dashboard-panel">
       <div class="dashboard-controls no-tv">
@@ -109,38 +145,68 @@
     </section>
 
     <!-- SCHÜTZEN -->
-    <section id="tab-shooters" class="panel active">
-      <h2>Teilnehmer des aktuellen Events</h2>
-      <p>Bekannte Schützen im <button type="button" id="openRegistry" class="link">Schützenstamm auswählen</button>. Neue Personen hier anlegen:</p>
-      <form id="shooterForm" class="inline-form">
-        <label class="start-number-field">Startnummer
-          <input type="number" id="shooterStartNumber" min="1" step="1" required aria-describedby="startNumberHint">
-        </label>
-        <input type="text" id="shooterFirstName" placeholder="Vorname" maxlength="100" autocomplete="given-name" required>
-        <input type="text" id="shooterLastName" placeholder="Nachname" maxlength="100" autocomplete="family-name" required>
-        <select id="shooterGender">
-          <option value="m">männlich</option>
-          <option value="w">weiblich</option>
-        </select>
-        <label id="shooterTeamField" class="shooter-team-field" hidden>Mannschaft
-          <select id="shooterTeam"></select>
-        </label>
-        <button type="submit">Hinzufügen</button>
-      </form>
-      <p id="startNumberHint" class="hint">Die nächste freie Startnummer wird vorgeschlagen und kann vor dem Speichern geändert werden.</p>
-      <table class="data-table">
-        <thead><tr><th>Startnummer</th><th>Nachname, Vorname</th><th>Geschlecht</th><th>Mannschaft</th><th></th></tr></thead>
+    <section id="tab-shooters" class="panel">
+      <h2>Teilnehmer</h2>
+      <p>Vorhandene Person im Schützenstamm suchen oder ausdrücklich eine neue Person anlegen.</p>
+      <div class="registration-workspace">
+        <div class="registration-selector">
+          <div class="segmented-control" aria-label="Art der Anmeldung">
+            <button type="button" id="registrationExistingBtn" class="active" aria-pressed="true">Vorhandene Person</button>
+            <button type="button" id="registrationNewBtn" aria-pressed="false">Neue Person</button>
+          </div>
+          <label id="registrationSearchLabel">Schützenstamm durchsuchen
+            <input id="registrationSearch" type="search" placeholder="Name suchen …" autocomplete="off">
+          </label>
+          <div id="registrationPeople" class="selection-list" aria-label="Person auswählen"></div>
+          <p id="registrationSearchStatus" class="hint" role="status"></p>
+        </div>
+        <form id="shooterForm" class="registration-form">
+          <h3 id="registrationFormTitle">Person auswählen</h3>
+          <p id="registrationPersonSummary" class="hint">Wähle links eine vorhandene Person aus.</p>
+          <div id="registrationNameFields" class="name-fields" hidden>
+            <label>Vorname <input type="text" id="shooterFirstName" maxlength="100" autocomplete="given-name"></label>
+            <label>Nachname <input type="text" id="shooterLastName" maxlength="100" autocomplete="family-name"></label>
+            <label>Geschlecht <select id="shooterGender"><option value="m">männlich</option><option value="w">weiblich</option></select></label>
+          </div>
+          <div id="registrationEventFields" class="registration-event-fields">
+            <label class="start-number-field">Startnummer
+              <input type="number" id="shooterStartNumber" min="1" step="1" required aria-describedby="startNumberHint">
+            </label>
+            <label id="shooterTeamField" class="shooter-team-field" hidden>Mannschaft
+              <select id="shooterTeam"></select>
+            </label>
+          </div>
+          <p id="startNumberHint" class="hint">Die nächste freie Startnummer wird vorgeschlagen und kann vor dem Speichern geändert werden.</p>
+          <p id="registrationError" class="field-error" role="alert"></p>
+          <div class="form-actions"><button type="submit" id="registrationSubmit" disabled>Für Veranstaltung anmelden</button></div>
+        </form>
+      </div>
+      <div id="registrationSuccess" class="success-panel" hidden role="status">
+        <p id="registrationSuccessText"></p>
+        <button type="button" id="registerAnotherBtn" class="secondary">Weitere Person anmelden</button>
+        <button type="button" id="registrationResultsBtn">Ergebnisse erfassen</button>
+      </div>
+      <div class="section-heading-row">
+        <div><h3>Angemeldete Teilnehmer</h3><p id="shooterCount" class="hint"></p></div>
+        <label>Teilnehmer suchen <input id="shooterSearch" type="search" placeholder="Name oder Startnummer …"></label>
+      </div>
+      <div class="table-scroll"><table class="data-table">
+        <thead><tr><th>Startnummer</th><th>Nachname, Vorname</th><th>Geschlecht</th><th>Mannschaft</th><th>Aktionen</th></tr></thead>
         <tbody id="shooterTableBody"></tbody>
-      </table>
+      </table></div>
     </section>
 
     <section id="tab-people" class="panel">
-      <h2>Schützenstamm &amp; Historie</h2>
+      <h2>Schützenstamm</h2>
       <label>Schützen suchen <input id="peopleSearch" type="search" placeholder="Name"></label>
-      <button id="newPersonBtn">Person ohne Event-Anmeldung anlegen</button><p id="peopleStatus" role="status"></p>
-      <div class="table-scroll"><table class="data-table"><thead><tr><th>Name</th><th>Events</th><th>Aktuelle Startnummer</th><th>Einladung</th><th>Aktionen</th></tr></thead><tbody id="peopleRows"></tbody></table></div>
+      <button id="newPersonBtn">Person ohne Veranstaltungsanmeldung anlegen</button><p id="peopleStatus" role="status"></p>
+      <div class="table-scroll"><table class="data-table"><thead><tr><th>Name</th><th>Veranstaltungen</th><th>Aktuelle Startnummer</th><th>Einladung</th><th></th></tr></thead><tbody id="peopleRows"></tbody></table></div>
+    </section>
+
+    <section id="tab-invitations" class="panel">
+      <h2>Einladungen</h2>
       <div class="card"><h3>Einladungsadressen exportieren</h3>
-        <label>Frühere Teilnahme <select id="invitationEvent"><option value="">Alle Events</option></select></label>
+        <label>Frühere Teilnahme <select id="invitationEvent"><option value="">Alle Veranstaltungen</option></select></label>
         <button id="invitationExport">Empfänger als CSV herunterladen</button>
         <p class="hint">Nur freigegebene Adressen mit dokumentierter Einwilligung. Vor dem Versand aktuell exportieren; Adressen nicht offen in das An-Feld einer Sammelmail setzen.</p>
       </div>
@@ -153,7 +219,7 @@
       <details id="teamCreateDetails" class="team-create">
         <summary>Neue Mannschaft anlegen</summary>
         <form id="teamForm" class="inline-form">
-          <input id="teamName" type="text" maxlength="200" required placeholder="Name der Mannschaft">
+          <label>Mannschaftsname <input id="teamName" type="text" maxlength="200" required></label>
           <button type="submit">Mannschaft hinzufügen</button>
         </form>
       </details>
@@ -186,11 +252,39 @@
 
     <!-- DISZIPLINEN -->
     <section id="tab-disciplines" class="panel">
-      <h2>Disziplinen</h2>
+      <h2>Veranstaltung &amp; Disziplinen</h2>
+      <div class="card">
+        <h3>Veranstaltungsdaten</h3>
+        <p class="hint">Titel und Jahr erscheinen auf Ranglisten, Exporten und der Live-Anzeige.</p>
+        <form id="seasonTitleForm" class="inline-form">
+          <label>Veranstaltungstitel <input type="text" id="seasonTitle" maxlength="200" placeholder="z. B. Vereinsschießen 2026"></label>
+          <label>Veranstaltungsjahr <input type="number" id="seasonYear" min="1900" max="2200" required></label>
+          <button type="submit">Veranstaltungsdaten speichern</button>
+          <span id="seasonTitleStatus" class="hint" aria-live="polite"></span>
+        </form>
+      </div>
+      <div class="card">
+        <h3>Wertungen</h3>
+        <p class="hint">Diese Einstellungen gelten für die aktive Veranstaltung.</p>
+        <form id="teamSettingsForm" class="settings-form">
+          <fieldset><legend>Aktive Wertungen</legend>
+            <label><input type="radio" name="teamScoringMode" value="individual"> Nur Einzelwertung</label>
+            <label><input type="radio" name="teamScoringMode" value="team"> Nur Mannschaftswertung</label>
+            <label><input type="radio" name="teamScoringMode" value="both"> Einzel- und Mannschaftswertung</label>
+          </fieldset>
+          <div class="inline-form settings-numbers">
+            <label>Maximale Mitgliederzahl <input id="teamMaxMembers" type="number" min="1" max="100" required></label>
+            <label>Gewertete Ergebnisse <input id="teamCountedResults" type="number" min="1" max="100" required></label>
+            <button type="submit">Wertungen speichern</button>
+          </div>
+          <p id="teamSettingsStatus" class="hint" role="status"></p>
+        </form>
+      </div>
+      <h3>Disziplinen</h3>
       <form id="disciplineForm" class="inline-form">
-        <input type="text" id="disciplineName" placeholder="Name der Disziplin" required>
-        <select id="disciplineRankingMode" aria-label="Wertungsart"><option value="combined">Gemeinsame Wertung</option><option value="separate">Getrennt: Frauen / Männer</option></select>
-        <button type="submit">Hinzufügen</button>
+        <label>Name <input type="text" id="disciplineName" placeholder="Name der Disziplin" required></label>
+        <label>Wertungsart <select id="disciplineRankingMode"><option value="combined">Gemeinsame Wertung</option><option value="separate">Getrennt: Frauen / Männer</option></select></label>
+        <button type="submit">Disziplin hinzufügen</button>
       </form>
       <table class="data-table">
         <thead><tr><th>Name</th><th>Wertung</th><th></th></tr></thead>
@@ -219,7 +313,7 @@
       </div>
       <p id="resultFeedback" role="status" aria-live="polite"></p>
       <p id="individualRankingHint" class="hint">Hinweis: Für die Einzelrangliste zählt automatisch der beste Durchgang; bei Gleichstand entscheidet der nächstbeste.</p>
-      <p id="teamSelectionHint" class="hint" hidden>Für die Mannschaftswertung muss je Schütze und Disziplin genau ein Durchgang ausdrücklich markiert werden. Die Auswahl kann jederzeit geändert oder entfernt werden.</p>
+      <p id="teamSelectionHint" class="hint" hidden>Für die Mannschaftswertung muss je Schütze und Disziplin genau ein Durchgang ausdrücklich ausgewählt werden. Die Auswahl kann jederzeit geändert oder entfernt werden.</p>
       <p class="hint">„Noch kein Ergebnis“ bedeutet: kein Durchgang erfasst. Daraus lässt sich keine Anmeldung oder Schießpflicht ableiten.</p>
     </section>
 
@@ -264,15 +358,19 @@
 
     <!-- IMPORT -->
     <section id="tab-import" class="panel">
-      <h2>Excel-, CSV- oder JSON-Import</h2>
-      <p class="hint">JSON-Archive werden nach Vorschau und Personenzuordnung als zusätzliche historische Events übernommen. Excel/CSV ergänzt das aktive Event: bekannte Personen vorher im Schützenstamm anmelden. Spalten: Startnummer (optional), Name, Geschlecht (m/w), Disziplin, Durchgang (optional), Punkte. Für XLSX wird eine integritätsgeprüfte Bibliothek von cdnjs geladen; CSV bleibt vollständig offline.</p>
-      <input type="file" id="importFile" accept=".json,.csv,.xlsx,.xls,.xlsm">
+      <h2>Import / Export</h2>
+      <div class="import-purpose-grid">
+        <article class="card"><h3>Ergebnisse zur aktuellen Veranstaltung hinzufügen</h3><p>CSV- und Excel-Dateien ergänzen angemeldete Teilnehmer, Disziplinen und Ergebnisse.</p></article>
+        <article class="card"><h3>Historische Veranstaltung importieren</h3><p>JSON-Archive werden nach Vorschau und bewusster Personenzuordnung in die Historie übernommen.</p></article>
+      </div>
+      <p class="hint">Spalten für CSV/Excel: Startnummer (optional), Name, Geschlecht (m/w), Disziplin, Durchgang (optional), Punkte. XLSX lädt eine integritätsgeprüfte Bibliothek; CSV und JSON funktionieren offline.</p>
+      <label class="file-field">Importdatei auswählen <input type="file" id="importFile" accept=".json,.csv,.xlsx,.xls,.xlsm"></label>
 
       <div id="importArchiveWrap" style="display:none">
         <div class="card">
           <h3>JSON-Saisonarchiv erkannt</h3>
           <p id="archiveImportSummary"></p>
-          <p class="hint">Das Archiv wird als zusätzliches historisches Event importiert. Jahr und Personenzuordnung werden zuerst geprüft; Kontakte bleiben erhalten.</p>
+          <p class="hint">Das Archiv wird als zusätzliche historische Veranstaltung importiert. Jahr und Personenzuordnung werden zuerst geprüft; Kontakte bleiben erhalten.</p>
           <button id="importArchiveBtn">Importvorschau öffnen</button>
         </div>
       </div>
@@ -293,72 +391,60 @@
         <button id="importSubmitBtn">Import starten</button>
       </div>
       <pre id="importResult"></pre>
+      <div class="card"><h3>Aktive Veranstaltung exportieren</h3><p>Enthält Teilnehmer und Ergebnisse, aber keine E-Mail-Adressen.</p><button id="exportBtn">Veranstaltungsdatei herunterladen</button></div>
     </section>
 
-    <!-- SAISON & NETZWERK -->
-    <section id="tab-season" class="panel">
-      <h2>Saison &amp; Netzwerk</h2>
+    <section id="tab-network" class="panel">
+      <h2>Netzwerk</h2>
       <div class="card">
-        <h3>Eventtitel</h3>
-        <p class="hint">Der Titel erscheint auf Ergebnislisten und wird als Dateiname für Exporte und Archive verwendet.</p>
-        <form id="seasonTitleForm" class="inline-form">
-          <input type="text" id="seasonTitle" maxlength="200" placeholder="z.B. Vereinsschießen 2026">
-          <label>Veranstaltungsjahr <input type="number" id="seasonYear" min="1900" max="2200" required></label>
-          <button type="submit">Titel speichern</button>
-          <span id="seasonTitleStatus" class="hint" aria-live="polite"></span>
-        </form>
-      </div>
-      <div class="card">
-        <h3>Mannschaftswertung</h3>
-        <p class="hint">Die Einstellungen gelten für das aktuelle Event. Bestehende Events bleiben standardmäßig bei der Einzelwertung.</p>
-        <form id="teamSettingsForm" class="settings-form">
-          <fieldset>
-            <legend>Aktive Wertungen</legend>
-            <label><input type="radio" name="teamScoringMode" value="individual"> Nur Einzelwertung</label>
-            <label><input type="radio" name="teamScoringMode" value="team"> Nur Mannschaftswertung</label>
-            <label><input type="radio" name="teamScoringMode" value="both"> Einzel- und Mannschaftswertung</label>
-          </fieldset>
-          <div class="inline-form settings-numbers">
-            <label>Maximale Mitgliederzahl <input id="teamMaxMembers" type="number" min="1" max="100" required></label>
-            <label>Gewertete Ergebnisse <input id="teamCountedResults" type="number" min="1" max="100" required></label>
-            <button type="submit">Einstellungen speichern</button>
-          </div>
-          <p id="teamSettingsStatus" class="hint" role="status"></p>
-        </form>
-      </div>
-      <div class="card">
-        <h3>Zugriff im lokalen Netzwerk</h3>
-        <p>Andere Geräte (z.B. Smartphone) können über folgende Adresse zugreifen, wenn sie im selben WLAN sind:</p>
+        <h3>Öffentliche Live-Anzeige</h3>
+        <p>Andere Geräte im selben WLAN können diese Anzeige ohne Verwaltungsanmeldung öffnen:</p>
         <ul id="lanIpList"></ul>
-        <p class="hint">Falls der Zugriff nicht funktioniert: Windows-Firewall muss den Port freigeben (siehe Anleitung/README).</p>
+        <p class="hint">Über unverschlüsseltes HTTP ist im Netzwerk nur die öffentliche Live-Anzeige erreichbar. Die Verwaltung bleibt auf dem Veranstaltungsrechner; für Verwaltung über andere Geräte ist HTTPS erforderlich.</p>
       </div>
+    </section>
+
+    <section id="tab-backup" class="panel">
+      <h2>Datensicherung</h2>
       <div class="card">
-        <h3>Backup</h3>
-        <button id="exportBtn">Aktuelles Event exportieren (ohne E-Mail)</button>
-        <button id="createBackup">Vollbackup erstellen</button><p id="backupStatus" role="status"></p><ul id="backupList"></ul>
-        <label>Vollbackup wiederherstellen <input type="file" id="restoreFile" accept=".json"></label>
+        <h3>Vollständige Datensicherung</h3>
+        <p>Enthält den Schützenstamm, Kontakte, Veranstaltungen und Ergebnisse.</p>
+        <button id="createBackup">Vollbackup jetzt erstellen</button><p id="backupStatus" role="status"></p><ul id="backupList" class="backup-list"></ul>
+        <label class="file-field">Vollbackup wiederherstellen <input type="file" id="restoreFile" accept=".json"></label>
         <div id="restoreReview" hidden>
-          <p>Der wiederhergestellte Bestand ist gesperrt. Löschungen und Widerrufe abgleichen; betroffene Personen im Schützenstamm bereinigen. Kontakte benötigen danach erneut einen dokumentierten Einwilligungsnachweis.</p>
+          <p>Der wiederhergestellte Bestand ist gesperrt. Löschungen und Widerrufe abgleichen; Kontakte benötigen danach erneut einen dokumentierten Einwilligungsnachweis.</p>
           <label>Abgleich dokumentieren <textarea id="reviewNote" minlength="15" maxlength="2000"></textarea></label>
           <button id="finishReview">Datenschutzabgleich abschließen</button>
         </div>
       </div>
+    </section>
+
+    <section id="tab-history" class="panel">
+      <h2>Veranstaltungshistorie</h2>
       <div class="card">
-        <h3>Neues Event starten</h3>
-        <p class="hint">Das bisherige Event wird abgeschlossen. Schützenstamm und Historie bleiben erhalten; das neue Event beginnt ohne Teilnehmer, Disziplinen und Ergebnisse.</p>
-        <label>Neuer Titel <input id="nextEventTitle" type="text" maxlength="200"></label>
-        <label>Neues Jahr <input id="nextEventYear" type="number" min="1900" max="2200"></label>
-        <button id="resetSeasonBtn">Bisheriges Event abschließen und neues starten</button>
+        <h3>Aktive Veranstaltung abschließen und neue starten</h3>
+        <p class="hint">Teilnehmer, Disziplinen und Ergebnisse werden abgeschlossen. Schützenstamm und Historie bleiben erhalten; die neue Veranstaltung beginnt leer.</p>
+        <div class="inline-form">
+          <label>Neuer Veranstaltungstitel <input id="nextEventTitle" type="text" maxlength="200"></label>
+          <label>Neues Jahr <input id="nextEventYear" type="number" min="1900" max="2200"></label>
+          <button id="resetSeasonBtn">Wechsel prüfen</button>
+        </div>
       </div>
-      <div class="card"><h3>Events und Abschlusswertungen</h3><div id="eventList"></div></div>
+      <div class="card"><h3>Veranstaltungen und Abschlusswertungen</h3><div id="eventList"></div></div>
       <div class="card">
-        <h3>Vorhandene Archive</h3>
+        <h3>Veranstaltungsdateien</h3>
         <ul id="archiveList"></ul>
       </div>
     </section>
   </main>
 
   <dialog id="detailDialog"><button type="button" id="closeDetail">Schließen</button><div id="detailContent"></div></dialog>
+  <dialog id="confirmDialog" class="confirm-dialog" aria-labelledby="confirmTitle">
+    <form method="dialog"><h2 id="confirmTitle">Aktion bestätigen</h2><p id="confirmMessage"></p>
+      <div class="form-actions"><button value="cancel" class="secondary">Abbrechen</button><button id="confirmAccept" value="confirm">Bestätigen</button></div>
+    </form>
+  </dialog>
+  <div id="appStatus" class="app-status" role="status" aria-live="polite" hidden></div>
   <script src="/app.js"></script>
   <script src="/results.js"></script>
   <script src="/manage.js"></script>

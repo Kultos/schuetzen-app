@@ -30,6 +30,27 @@ function el(tag, attrs = {}, children = []) {
   return e;
 }
 
+let statusTimer;
+function showAppStatus(message, type = 'info') {
+  const status = document.getElementById('appStatus');
+  status.textContent = message;
+  status.className = `app-status ${type}`;
+  status.hidden = false;
+  clearTimeout(statusTimer);
+  statusTimer = setTimeout(() => { status.hidden = true; }, 6000);
+}
+
+function confirmAction(title, message, confirmLabel = 'Bestätigen', danger = false) {
+  const dialog = document.getElementById('confirmDialog');
+  document.getElementById('confirmTitle').textContent = title;
+  document.getElementById('confirmMessage').textContent = message;
+  const accept = document.getElementById('confirmAccept');
+  accept.textContent = confirmLabel;
+  accept.classList.toggle('danger', danger);
+  dialog.showModal();
+  return new Promise((resolve) => dialog.addEventListener('close', () => resolve(dialog.returnValue === 'confirm'), { once: true }));
+}
+
 function splitShooterName(name) {
   const normalized = String(name || '').trim().replace(/\s+/g, ' ');
   const comma = normalized.indexOf(',');
@@ -65,6 +86,15 @@ function renderEventTitle() {
   const printEventTitle = document.getElementById('printEventTitle');
   printEventTitle.textContent = state.eventTitle;
   printEventTitle.style.display = state.eventTitle ? '' : 'none';
+  const label = document.getElementById('activeEventLabel');
+  if (label) label.textContent = `${state.event?.year || 'Jahr offen'} · ${state.eventTitle || 'Ohne Titel'}`;
+  const overviewTitle = document.getElementById('overviewEventTitle');
+  if (overviewTitle) overviewTitle.textContent = state.eventTitle || 'Ohne Titel';
+  const overviewMeta = document.getElementById('overviewEventMeta');
+  if (overviewMeta) {
+    const scoring = state.event?.scoring_mode === 'team' ? 'Mannschaftswertung' : state.event?.scoring_mode === 'both' ? 'Einzel- und Mannschaftswertung' : 'Einzelwertung';
+    overviewMeta.textContent = `${state.event?.year || 'Jahr offen'} · ${scoring}`;
+  }
 }
 
 async function loadEventTitle() {
@@ -78,29 +108,74 @@ async function loadEventTitle() {
   renderEventTitle();
 }
 
-// ---------------- Tabs ----------------
+// ---------------- Navigation ----------------
 
-document.querySelectorAll('.tab').forEach((btn) => {
-  if (!btn.dataset.tab) return;
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach((b) => b.classList.remove('active'));
-    document.querySelectorAll('.panel').forEach((p) => p.classList.remove('active'));
-    btn.classList.add('active');
-    document.querySelector('main').classList.toggle('results-main', ['teams', 'results', 'rankings'].includes(btn.dataset.tab));
-    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
-    if (btn.dataset.tab === 'dashboard') startDashboard();
-    else stopDashboard();
-    if (btn.dataset.tab === 'results') refreshResultSelectors();
-    if (btn.dataset.tab === 'rankings') refreshRankingSelector();
-    if (btn.dataset.tab === 'teams') loadTeams();
-    if (btn.dataset.tab === 'season') refreshSeasonInfo();
-    if (btn.dataset.tab === 'people') loadPeople();
-  });
+const validTabs = new Set([...document.querySelectorAll('.tab[data-tab]')].map((button) => button.dataset.tab));
+let activeTab = 'overview';
+
+function hasUnsavedChanges() {
+  return Boolean(document.querySelector('.panel.active form[data-dirty="true"]'));
+}
+
+async function showTab(tabName, { updateHash = true } = {}) {
+  if (!validTabs.has(tabName)) tabName = 'overview';
+  if (tabName !== activeTab && hasUnsavedChanges()) {
+    const leave = await confirmAction('Ungespeicherte Eingaben', 'Eingaben wurden noch nicht gespeichert. Bereich trotzdem verlassen?', 'Bereich verlassen');
+    if (!leave) {
+      if (!updateHash) history.replaceState(null, '', `#${activeTab}`);
+      return;
+    }
+  }
+  activeTab = tabName;
+  document.querySelectorAll('.tab').forEach((button) => button.classList.toggle('active', button.dataset.tab === tabName));
+  document.querySelectorAll('.panel').forEach((panel) => panel.classList.toggle('active', panel.id === `tab-${tabName}`));
+  document.querySelector('main').classList.toggle('results-main', ['teams', 'results', 'rankings'].includes(tabName));
+  if (updateHash && location.hash !== `#${tabName}`) history.pushState(null, '', `#${tabName}`);
+  if (tabName === 'dashboard') startDashboard(); else stopDashboard();
+  if (tabName === 'overview') await refreshOverview();
+  if (tabName === 'shooters') await loadRegistrationPeople();
+  if (tabName === 'results') await refreshResultSelectors();
+  if (tabName === 'rankings') await refreshRankingSelector();
+  if (tabName === 'teams') await loadTeams();
+  if (['disciplines', 'history', 'backup', 'network'].includes(tabName)) await refreshSeasonInfo();
+  if (tabName === 'people') await loadPeople();
+  if (tabName === 'invitations') await loadInvitationEvents();
+}
+
+document.querySelectorAll('.tab[data-tab]').forEach((button) => button.addEventListener('click', () => showTab(button.dataset.tab)));
+document.querySelectorAll('[data-go-tab]').forEach((button) => button.addEventListener('click', () => showTab(button.dataset.goTab)));
+window.addEventListener('hashchange', () => showTab(location.hash.slice(1), { updateHash: false }));
+
+function activateTab(tabName) { return showTab(tabName); }
+
+document.addEventListener('input', (event) => {
+  const form = event.target.closest?.('form');
+  if (form) form.dataset.dirty = 'true';
+});
+document.addEventListener('change', (event) => {
+  const form = event.target.closest?.('form');
+  if (form) form.dataset.dirty = 'true';
+});
+window.addEventListener('beforeunload', (event) => {
+  if (!hasUnsavedChanges()) return;
+  event.preventDefault();
+  event.returnValue = '';
 });
 
-function activateTab(tabName) {
-  const button = document.querySelector(`.tab[data-tab="${tabName}"]`);
-  if (button) button.click();
+async function refreshOverview() {
+  try {
+    const data = await api('/api/dashboard');
+    document.getElementById('overviewShooterCount').textContent = data.stats.shooters;
+    document.getElementById('overviewTeamCount').textContent = data.stats.teams || 0;
+    document.getElementById('overviewDisciplineCount').textContent = data.stats.disciplines;
+    document.getElementById('overviewResultCount').textContent = data.stats.results;
+    const guidance = document.getElementById('overviewGuidance');
+    if (!data.stats.disciplines) guidance.replaceChildren(el('p', { text: 'Lege zuerst mindestens eine Disziplin an.' }), el('button', { type: 'button', text: 'Disziplin anlegen', onclick: () => activateTab('disciplines') }));
+    else if (!data.stats.shooters) guidance.replaceChildren(el('p', { text: 'Melde jetzt die ersten Teilnehmer an.' }), el('button', { type: 'button', text: 'Teilnehmer anmelden', onclick: () => activateTab('shooters') }));
+    else guidance.replaceChildren(el('p', { text: 'Die Veranstaltung ist eingerichtet. Ergebnisse können erfasst werden.' }));
+  } catch (error) {
+    document.getElementById('overviewGuidance').textContent = `Übersicht konnte nicht geladen werden: ${error.message}`;
+  }
 }
 
 // ---------------- Live Dashboard ----------------
@@ -295,6 +370,7 @@ document.getElementById('exitTvDashboardBtn').addEventListener('click', () => { 
 // ---------------- Shooters ----------------
 
 let editingShooterId = null;
+const registrationView = { mode: 'existing', personId: null, people: [], searchRequest: 0 };
 
 async function loadShooters() {
   const [shooters,teams]=await Promise.all([api('/api/shooters'),api('/api/teams')]);
@@ -303,10 +379,87 @@ async function loadShooters() {
   renderShooterTeamSelect();
   const body = document.getElementById('shooterTableBody');
   body.innerHTML = '';
-  for (const s of state.shooters) {
+  const query = document.getElementById('shooterSearch').value.trim().toLocaleLowerCase('de-DE');
+  const visibleShooters = state.shooters.filter((shooter) => `${shooter.start_number} ${shooter.name}`.toLocaleLowerCase('de-DE').includes(query));
+  for (const s of visibleShooters) {
     body.appendChild(s.id === editingShooterId ? renderShooterEditRow(s) : renderShooterRow(s));
   }
+  document.getElementById('shooterCount').textContent = query
+    ? `${visibleShooters.length} von ${state.shooters.length} Teilnehmern gefunden.`
+    : `${state.shooters.length} Teilnehmer angemeldet.`;
   if (!editingShooterId) await refreshStartNumberSuggestion();
+}
+
+function setRegistrationMode(mode) {
+  registrationView.mode = mode;
+  registrationView.personId = null;
+  const existing = mode === 'existing';
+  document.getElementById('registrationExistingBtn').classList.toggle('active', existing);
+  document.getElementById('registrationNewBtn').classList.toggle('active', !existing);
+  document.getElementById('registrationExistingBtn').setAttribute('aria-pressed', String(existing));
+  document.getElementById('registrationNewBtn').setAttribute('aria-pressed', String(!existing));
+  document.getElementById('registrationSearchLabel').hidden = !existing;
+  document.getElementById('registrationPeople').hidden = !existing;
+  document.getElementById('registrationSearchStatus').hidden = !existing;
+  document.getElementById('registrationNameFields').hidden = existing;
+  document.getElementById('registrationEventFields').hidden = existing;
+  document.getElementById('registrationFormTitle').textContent = existing ? 'Person auswählen' : 'Neue Person anlegen und anmelden';
+  document.getElementById('registrationPersonSummary').textContent = existing ? 'Wähle links eine vorhandene Person aus.' : 'Die Person wird im Schützenstamm angelegt und direkt für diese Veranstaltung angemeldet.';
+  document.getElementById('registrationSubmit').disabled = existing;
+  document.getElementById('registrationSubmit').textContent = 'Für Veranstaltung anmelden';
+  document.getElementById('registrationError').textContent = '';
+  document.getElementById('registrationSuccess').hidden = true;
+  if (!existing) {
+    document.getElementById('registrationEventFields').hidden = false;
+    document.getElementById('shooterFirstName').focus();
+  }
+  renderRegistrationPeople();
+}
+
+function renderRegistrationPeople() {
+  const list = document.getElementById('registrationPeople');
+  list.replaceChildren();
+  for (const person of registrationView.people) {
+    const status = person.archived_at ? 'archiviert' : person.start_number ? `bereits angemeldet · Nr. ${person.start_number}` : `${person.event_count} Veranstaltung(en)`;
+    list.appendChild(el('button', {
+      type: 'button', class: `selection-option${person.id === registrationView.personId ? ' active' : ''}`,
+      ...(person.archived_at ? { disabled: '' } : {}),
+      'aria-pressed': String(person.id === registrationView.personId),
+      onclick: () => selectRegistrationPerson(person),
+    }, [el('strong', { text: person.name }), el('small', { text: status })]));
+  }
+}
+
+function selectRegistrationPerson(person) {
+  registrationView.personId = person.id;
+  renderRegistrationPeople();
+  document.getElementById('registrationFormTitle').textContent = person.name;
+  document.getElementById('registrationPersonSummary').textContent = person.start_number
+    ? `Bereits mit Startnummer ${person.start_number} angemeldet.`
+    : 'Startnummer und optional Mannschaft für die aktive Veranstaltung festlegen.';
+  document.getElementById('registrationEventFields').hidden = Boolean(person.start_number);
+  document.getElementById('registrationSubmit').disabled = false;
+  document.getElementById('registrationSubmit').textContent = person.start_number ? 'Zur Teilnahme' : 'Für Veranstaltung anmelden';
+  document.getElementById('registrationError').textContent = '';
+}
+
+async function loadRegistrationPeople() {
+  const request = ++registrationView.searchRequest;
+  const query = document.getElementById('registrationSearch').value.trim();
+  const people = await api('/api/people?search=' + encodeURIComponent(query));
+  if (request !== registrationView.searchRequest) return;
+  registrationView.people = people;
+  if (!people.some((person) => person.id === registrationView.personId)) registrationView.personId = null;
+  renderRegistrationPeople();
+  document.getElementById('registrationSearchStatus').textContent = people.length
+    ? `${people.length} Person(en) gefunden.`
+    : 'Keine Person gefunden. Prüfe den Namen oder lege ausdrücklich eine neue Person an.';
+}
+
+function showRegistrationSuccess(shooter) {
+  document.getElementById('registrationSuccessText').textContent = `${shooter.name} wurde mit Startnummer ${shooter.start_number} angemeldet.`;
+  document.getElementById('registrationSuccess').hidden = false;
+  resultView.shooterId = shooter.id;
 }
 
 function renderShooterTeamSelect() {
@@ -357,9 +510,9 @@ function renderShooterRow(s) {
       }),
       el('button', {
         class: 'link danger-text',
-        text: 'Löschen',
+        text: 'Aus Veranstaltung entfernen',
         onclick: async () => {
-          if (!confirm(`"${s.name}" aus dem aktuellen Event entfernen? Dessen aktuelle Ergebnisse werden gelöscht. Schützenstamm und frühere Events bleiben erhalten.`)) return;
+          if (!await confirmAction('Teilnahme entfernen', `„${s.name}“ aus der aktiven Veranstaltung entfernen? Die aktuellen Ergebnisse werden gelöscht. Schützenstamm und frühere Veranstaltungen bleiben erhalten.`, 'Aus Veranstaltung entfernen', true)) return;
           await api(`/api/shooters/${s.id}`, { method: 'DELETE' });
           loadShooters();
         },
@@ -393,20 +546,19 @@ function renderShooterEditRow(s) {
     const first_name = firstNameInput.value.trim();
     const last_name = lastNameInput.value.trim();
     const start_number = Number(startNumberInput.value);
-    if (!first_name || !last_name) { alert('Vorname und Nachname dürfen nicht leer sein.'); return; }
-    if (!Number.isSafeInteger(start_number) || start_number < 1) { alert('Die Startnummer muss eine positive ganze Zahl sein.'); return; }
+    if (!first_name || !last_name) { showAppStatus('Vorname und Nachname dürfen nicht leer sein.', 'error'); return; }
+    if (!Number.isSafeInteger(start_number) || start_number < 1) { showAppStatus('Die Startnummer muss eine positive ganze Zahl sein.', 'error'); return; }
     const payload = { name: `${last_name}, ${first_name}`, first_name, last_name, gender: genderSelect.value, start_number, ...(teamModeEnabled()?{team_id:teamSelect.value?Number(teamSelect.value):null}:{}) };
     try {
       await api(`/api/shooters/${s.id}`, { method: 'PUT', body: JSON.stringify(payload) });
       editingShooterId = null;
       loadShooters();
     } catch (error) {
-      if (error.code !== 'START_NUMBER_CONFLICT') { alert(error.message); return; }
+      if (error.code !== 'START_NUMBER_CONFLICT') { showAppStatus(error.message, 'error'); return; }
       const other = error.conflicting_shooter;
-      const shouldSwap = confirm(
-        `Startnummer ${start_number} gehört bereits ${other.name}.\n\n` +
-        `Sollen die Nummern getauscht werden? ${other.name} erhält dann Startnummer ${s.start_number}.`
-      );
+      const shouldSwap = await confirmAction('Startnummer tauschen',
+        `Startnummer ${start_number} gehört bereits ${other.name}. ${other.name} erhält beim Tausch Startnummer ${s.start_number}.`,
+        'Nummern tauschen');
       if (!shouldSwap) return;
       await api(`/api/shooters/${s.id}`, {
         method: 'PUT',
@@ -436,6 +588,16 @@ function renderShooterEditRow(s) {
 
 document.getElementById('shooterForm').addEventListener('submit', async (e) => {
   e.preventDefault();
+  const form = e.currentTarget;
+  const errorElement = document.getElementById('registrationError');
+  errorElement.textContent = '';
+  const selectedPerson = registrationView.people.find((person) => person.id === registrationView.personId);
+  if (registrationView.mode === 'existing' && selectedPerson?.start_number) {
+    resultView.shooterId = selectedPerson.id;
+    document.getElementById('resultSearch').value = '';
+    await activateTab('results');
+    return;
+  }
   const firstNameInput = document.getElementById('shooterFirstName');
   const lastNameInput = document.getElementById('shooterLastName');
   const first_name = firstNameInput.value.trim();
@@ -444,24 +606,43 @@ document.getElementById('shooterForm').addEventListener('submit', async (e) => {
   const startNumberInput = document.getElementById('shooterStartNumber');
   const teamSelect = document.getElementById('shooterTeam');
   const start_number = Number(startNumberInput.value);
-  if (!first_name || !last_name) return;
-  if (!Number.isSafeInteger(start_number) || start_number < 1) { alert('Die Startnummer muss eine positive ganze Zahl sein.'); return; }
+  if (registrationView.mode === 'new' && (!first_name || !last_name)) { errorElement.textContent = 'Vorname und Nachname sind erforderlich.'; return; }
+  if (registrationView.mode === 'existing' && !selectedPerson) { errorElement.textContent = 'Bitte zuerst eine Person auswählen.'; return; }
+  if (!Number.isSafeInteger(start_number) || start_number < 1) { errorElement.textContent = 'Die Startnummer muss eine positive ganze Zahl sein.'; return; }
   try {
     const team_id = !teamSelect.disabled && teamSelect.value ? Number(teamSelect.value) : null;
-    await api('/api/shooters', { method: 'POST', body: JSON.stringify({ name: `${last_name}, ${first_name}`, first_name, last_name, gender, start_number, team_id }) });
+    const shooter = registrationView.mode === 'existing'
+      ? await api(`/api/people/${selectedPerson.id}/register`, { method: 'POST', body: JSON.stringify({ start_number, team_id }) })
+      : await api('/api/shooters', { method: 'POST', body: JSON.stringify({ name: `${last_name}, ${first_name}`, first_name, last_name, gender, start_number, team_id }) });
     firstNameInput.value = '';
     lastNameInput.value = '';
-    await loadShooters();
-    firstNameInput.focus();
+    await Promise.all([loadShooters(), loadRegistrationPeople()]);
+    showRegistrationSuccess(shooter);
+    form.dataset.dirty = 'false';
   } catch (error) {
     if (error.code === 'START_NUMBER_CONFLICT' && error.suggested_start_number) {
       startNumberInput.value = error.suggested_start_number;
-      alert(`${error.message}. Als nächste freie Startnummer wurde ${error.suggested_start_number} eingesetzt.`);
+      errorElement.textContent = `${error.message}. Als nächste freie Startnummer wurde ${error.suggested_start_number} eingesetzt.`;
       return;
     }
-    alert(error.message);
+    errorElement.textContent = error.message;
   }
 });
+
+document.getElementById('registrationExistingBtn').addEventListener('click', () => setRegistrationMode('existing'));
+document.getElementById('registrationNewBtn').addEventListener('click', () => setRegistrationMode('new'));
+let registrationSearchTimer;
+document.getElementById('registrationSearch').addEventListener('input', () => {
+  clearTimeout(registrationSearchTimer);
+  registrationSearchTimer = setTimeout(() => loadRegistrationPeople().catch((error) => { document.getElementById('registrationSearchStatus').textContent = error.message; }), 200);
+});
+document.getElementById('shooterSearch').addEventListener('input', () => loadShooters().catch((error) => { document.getElementById('shooterCount').textContent = error.message; }));
+document.getElementById('registerAnotherBtn').addEventListener('click', async () => {
+  setRegistrationMode('existing');
+  await refreshStartNumberSuggestion();
+  document.getElementById('registrationSearch').focus();
+});
+document.getElementById('registrationResultsBtn').addEventListener('click', () => activateTab('results'));
 
 // ---------------- Disciplines ----------------
 
@@ -493,7 +674,7 @@ function renderDisciplineRow(d) {
         class: 'link danger-text',
         text: 'Löschen',
         onclick: async () => {
-          if (!confirm(`Disziplin "${d.name}" wirklich löschen? Auch alle Ergebnisse dieser Disziplin werden entfernt.`)) return;
+          if (!await confirmAction('Disziplin löschen', `„${d.name}“ und alle Ergebnisse dieser Disziplin endgültig löschen?`, 'Disziplin löschen', true)) return;
           await api(`/api/disciplines/${d.id}`, { method: 'DELETE' });
           loadDisciplines();
         },
@@ -510,7 +691,7 @@ function renderDisciplineEditRow(d) {
 
   const save = async () => {
     const name = nameInput.value.trim();
-    if (!name) { alert('Name darf nicht leer sein.'); return; }
+    if (!name) { showAppStatus('Name darf nicht leer sein.', 'error'); return; }
     await api(`/api/disciplines/${d.id}`, { method: 'PUT', body: JSON.stringify({ name, ranking_mode: modeInput.value }) });
     editingDisciplineId = null;
     loadDisciplines();
@@ -533,11 +714,13 @@ function renderDisciplineEditRow(d) {
 
 document.getElementById('disciplineForm').addEventListener('submit', async (e) => {
   e.preventDefault();
+  const form = e.currentTarget;
   const name = document.getElementById('disciplineName').value.trim();
   const ranking_mode = document.getElementById('disciplineRankingMode').value;
   if (!name) return;
   await api('/api/disciplines', { method: 'POST', body: JSON.stringify({ name, ranking_mode }) });
   document.getElementById('disciplineName').value = '';
+  form.dataset.dirty = 'false';
   loadDisciplines();
 });
 
@@ -559,6 +742,8 @@ function applyTeamSettings(event) {
   document.getElementById('individualRankingHint').hidden = event.scoring_mode === 'team';
   const tabs = document.getElementById('rankingModeTabs');
   tabs.hidden = event.scoring_mode !== 'both';
+  document.getElementById('individualRankingBtn').hidden = event.scoring_mode === 'team';
+  document.getElementById('teamRankingBtn').hidden = event.scoring_mode === 'individual';
   if (event.scoring_mode === 'team') rankingView.mode = 'team';
   if (event.scoring_mode === 'individual') rankingView.mode = 'individual';
   renderShooterTeamSelect();
@@ -575,8 +760,8 @@ async function loadTeams() {
 function renderTeams() {
   const max=state.event?.team_max_members || 5;
   document.getElementById('teamRules').textContent=teamModeEnabled()
-    ? `Pro Mannschaft sind höchstens ${max} Mitglieder erlaubt; je Disziplin werden die besten ${state.event.team_counted_results} markierten Ergebnisse gewertet.`
-    : 'Für dieses Event ist derzeit nur die Einzelwertung aktiv. Mannschaften können vorbereitet und unter „Saison & Netzwerk“ aktiviert werden.';
+    ? `Pro Mannschaft sind höchstens ${max} Mitglieder erlaubt; je Disziplin werden die besten ${state.event.team_counted_results} ausgewählten Ergebnisse gewertet.`
+    : 'Für diese Veranstaltung ist derzeit nur die Einzelwertung aktiv. Mannschaften können vorbereitet und unter „Veranstaltung & Disziplinen“ aktiviert werden.';
   const list=document.getElementById('teamList');list.replaceChildren();
   for(const team of state.teams) list.appendChild(el('button',{type:'button',class:team.id===teamView.teamId?'active':'','aria-pressed':String(team.id===teamView.teamId),onclick:()=>{teamView.teamId=team.id;teamView.addOpen=false;teamView.rankings=new Map();renderTeams();loadTeamOverview();}},[
     el('span',{class:'team-option'},[el('strong',{text:team.name}),el('small',{text:`${team.member_count} von ${max} Mitgliedern`}),el('span',{class:'capacity',text:`${team.member_count}/${max}`})])
@@ -588,13 +773,25 @@ function renderTeams() {
     header.append(el('div',{class:'team-detail-title'},[el('h3',{text:selected.name}),el('small',{text:`${selected.member_count} von ${max} Plätzen belegt`})]),
       el('div',{class:'team-actions'},[
         el('button',{type:'button',text:'Schützen hinzufügen',...(selected.member_count>=max?{disabled:''}:{}),onclick:()=>{teamView.addOpen=true;renderTeamMemberPanel();document.getElementById('teamMemberSearch').focus();}}),
-        el('button',{type:'button',class:'link',text:'Umbenennen',onclick:async()=>{const name=prompt('Neuer Mannschaftsname',selected.name);if(!name?.trim())return;await teamMutation(`/api/teams/${selected.id}`,{method:'PUT',body:JSON.stringify({name:name.trim()})},'Mannschaft umbenannt.');}}),
-        el('button',{type:'button',class:'link danger-text',text:'Löschen',onclick:async()=>{if(!confirm(`Mannschaft „${selected.name}“ löschen? Die Teilnehmer bleiben im Event.`))return;await teamMutation(`/api/teams/${selected.id}`,{method:'DELETE'},'Mannschaft gelöscht.');}})
+        el('button',{type:'button',class:'link',text:'Umbenennen',onclick:()=>renameTeam(selected)}),
+        el('button',{type:'button',class:'link danger-text',text:'Löschen',onclick:async()=>{if(!await confirmAction('Mannschaft löschen',`Mannschaft „${selected.name}“ löschen? Die Teilnehmer bleiben in der Veranstaltung.`,'Mannschaft löschen',true))return;await teamMutation(`/api/teams/${selected.id}`,{method:'DELETE'},'Mannschaft gelöscht.');}})
       ]));
   } else header.appendChild(el('h3',{text:'Mannschaft auswählen'}));
   document.getElementById('teamResultsTitle').hidden=!selected;
   renderTeamOverview();
   renderTeamMemberPanel();
+}
+
+function renameTeam(team) {
+  const root=detail('Mannschaft umbenennen');
+  const form=el('form');
+  const input=el('input',{type:'text',required:'',maxlength:'200',value:team.name});
+  form.append(field('Mannschaftsname',input),el('div',{class:'form-actions'},[
+    el('button',{type:'button',class:'secondary',text:'Abbrechen',onclick:()=>document.getElementById('detailDialog').close()}),
+    el('button',{type:'submit',text:'Speichern'})
+  ]));
+  form.onsubmit=async event=>{event.preventDefault();await teamMutation(`/api/teams/${team.id}`,{method:'PUT',body:JSON.stringify({name:input.value.trim()})},'Mannschaft umbenannt.');document.getElementById('detailDialog').close();};
+  root.append(form);input.focus();
 }
 
 async function loadTeamOverview() {
@@ -641,7 +838,7 @@ function renderTeamOverview() {
     }
     cells.push(el('td',{class:'row-actions'},[
       el('button',{type:'button',class:'link',text:'Ergebnisse',onclick:()=>{resultView.shooterId=member.shooter_id;document.getElementById('resultSearch').value='';activateTab('results');}}),
-      el('button',{type:'button',class:'link danger-text',text:'Entfernen',onclick:async()=>{if(!confirm(`${member.name} aus „${selected.name}“ entfernen?`))return;await teamMutation(`/api/teams/members/${member.shooter_id}`,{method:'DELETE'},`${member.name} wurde aus der Mannschaft entfernt.`);}})
+      el('button',{type:'button',class:'link danger-text',text:'Entfernen',onclick:async()=>{if(!await confirmAction('Mannschaftszuordnung entfernen',`${member.name} aus „${selected.name}“ entfernen?`,'Zuordnung entfernen',true))return;await teamMutation(`/api/teams/members/${member.shooter_id}`,{method:'DELETE'},`${member.name} wurde aus der Mannschaft entfernt.`);}})
     ]));
     body.appendChild(el('tr',{},cells));
   }
@@ -661,14 +858,14 @@ function renderTeamMemberPanel() {
   for(const shooter of shooters) {
     const currentTeam=membership.get(shooter.id);
     const add=el('button',{type:'button',text:currentTeam?'Verschieben':'Hinzufügen',onclick:async()=>{
-      if(currentTeam && !confirm(`${shooter.name} aus „${currentTeam.name}“ nach „${selected.name}“ verschieben?`))return;
+      if(currentTeam && !await confirmAction('Teilnehmer verschieben',`${shooter.name} aus „${currentTeam.name}“ nach „${selected.name}“ verschieben?`,'Verschieben'))return;
       await teamMutation(`/api/teams/${selected.id}/members/${shooter.id}`,{method:'PUT'},`${shooter.name} wurde ${currentTeam?'verschoben':'hinzugefügt'}.`);
     }});add.disabled=teamView.busy || selected.member_count>=state.event.team_max_members;
     root.appendChild(el('div',{class:'available-team-member'},[
       el('div',{},[el('strong',{text:`#${shooter.start_number} · ${shooter.name}`}),el('small',{text:currentTeam?`Derzeit: ${currentTeam.name}`:'Noch keiner Mannschaft zugeordnet'})]),add
     ]));
   }
-  if(!shooters.length) root.appendChild(el('p',{class:'hint',text:state.shooters.length?'Keine passenden Schützen verfügbar.':'Noch keine Teilnehmer im Event.'}));
+  if(!shooters.length) root.appendChild(el('p',{class:'hint',text:state.shooters.length?'Keine passenden Schützen verfügbar.':'Noch keine Teilnehmer in der Veranstaltung.'}));
 }
 
 async function teamMutation(path,options,message) {
@@ -680,19 +877,19 @@ async function teamMutation(path,options,message) {
 }
 
 document.getElementById('teamForm').addEventListener('submit',async event=>{
-  event.preventDefault();const input=document.getElementById('teamName');
-  try {await teamMutation('/api/teams',{method:'POST',body:JSON.stringify({name:input.value})},'Mannschaft angelegt.');input.value='';document.getElementById('teamCreateDetails').open=false;}
+  event.preventDefault();const form=event.currentTarget,input=document.getElementById('teamName');
+  try {await teamMutation('/api/teams',{method:'POST',body:JSON.stringify({name:input.value})},'Mannschaft angelegt.');input.value='';form.dataset.dirty='false';document.getElementById('teamCreateDetails').open=false;}
   catch {}
 });
 document.getElementById('teamMemberSearch').addEventListener('input',renderTeamMemberPanel);
 document.getElementById('closeTeamMemberPanel').addEventListener('click',()=>{teamView.addOpen=false;renderTeamMemberPanel();});
 
 document.getElementById('teamSettingsForm').addEventListener('submit',async event=>{
-  event.preventDefault();const status=document.getElementById('teamSettingsStatus');status.textContent='Wird gespeichert …';
+  event.preventDefault();const form=event.currentTarget,status=document.getElementById('teamSettingsStatus');status.textContent='Wird gespeichert …';
   const scoring_mode=document.querySelector('input[name="teamScoringMode"]:checked')?.value;
   try {
     const saved=await api('/api/team-settings',{method:'PUT',body:JSON.stringify({scoring_mode,team_max_members:Number(document.getElementById('teamMaxMembers').value),team_counted_results:Number(document.getElementById('teamCountedResults').value)})});
-    applyTeamSettings(saved);status.textContent='Mannschaftswertung gespeichert.';
+    applyTeamSettings(saved);form.dataset.dirty='false';status.textContent='Wertungen gespeichert.';
   } catch(error){status.textContent='Fehler: '+error.message;}
 });
 
@@ -758,7 +955,7 @@ async function loadRanking() {
   document.getElementById('teamRankingBtn').setAttribute?.('class',teamRanking ? 'active' : '');
   document.getElementById('printTitle').textContent = (teamRanking ? 'Mannschaftsrangliste – ' : 'Rangliste – ') + (discipline ? discipline.name : '');
   document.getElementById('rankingExplanation').textContent=teamRanking && state.event
-    ? `Je Mannschaft zählen die besten ${state.event.team_counted_results} ausdrücklich markierten Ergebnisse. Bei Gleichstand werden diese Einzelergebnisse absteigend verglichen.` : '';
+    ? `Je Mannschaft zählen die besten ${state.event.team_counted_results} ausdrücklich ausgewählten Ergebnisse. Bei Gleichstand werden diese Einzelergebnisse absteigend verglichen.` : '';
   if (!discipline) {
     status.textContent = 'Sobald Disziplinen angelegt sind, erscheinen hier die Ranglisten.';
     return;
@@ -1018,7 +1215,7 @@ document.getElementById('importFile').addEventListener('change', async (e) => {
       detectedArchive = archive;
       const title = typeof archive.event_title === 'string' && archive.event_title.trim()
         ? `„${archive.event_title.trim()}“`
-        : 'ohne Eventtitel';
+        : 'ohne Veranstaltungstitel';
       document.getElementById('archiveImportSummary').textContent =
         `${title}: ${archive.shooters.length} Schütze(n), ${archive.disciplines.length} Disziplin(en), ${archive.results.length} Ergebnis(se).`;
       document.getElementById('importArchiveWrap').style.display = 'block';
@@ -1148,7 +1345,7 @@ document.getElementById('importSubmitBtn').addEventListener('click', async () =>
     mapping[sel.dataset.field] = sel.value;
   });
   if (!mapping.name || !mapping.discipline || !mapping.points) {
-    alert('Bitte mindestens Name, Disziplin und Punkte zuordnen.');
+    showAppStatus('Bitte mindestens Name, Disziplin und Punkte zuordnen.', 'error');
     return;
   }
   const rows = importRows.map((r) => ({
@@ -1192,7 +1389,7 @@ async function refreshSeasonInfo() {
     ipList.appendChild(el('li', { text: 'Keine LAN-Adresse gefunden (nur lokal am Laptop erreichbar).' }));
   }
   for (const ip of info.lan_ips) {
-    const address = `${window.location.protocol}//${ip}:${info.port}`;
+    const address = `${window.location.protocol}//${ip}:${info.port}/dashboard`;
     ipList.appendChild(el('li', {}, [el('a', { href: address, target: '_blank', text: address })]));
   }
   await refreshArchiveList();
@@ -1219,12 +1416,15 @@ document.getElementById('exportBtn').addEventListener('click', () => {
 
 document.getElementById('seasonTitleForm').addEventListener('submit', async (e) => {
   e.preventDefault();
+  const form = e.currentTarget;
   const status = document.getElementById('seasonTitleStatus');
   const title = document.getElementById('seasonTitle').value.trim();
   try {
     const year = Number(document.getElementById('seasonYear').value);
     const season = await api('/api/season', { method: 'PUT', body: JSON.stringify({ title, year }) });
     state.eventTitle = season.title;
+    state.event = season.event;
+    form.dataset.dirty = 'false';
     renderEventTitle();
     status.textContent = 'Gespeichert.';
   } catch (err) {

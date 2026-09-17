@@ -484,6 +484,25 @@ test('Mannschafts-API speichert Einstellungen, Zuordnungen und die gewählte Run
   assert.equal(People.list('Nicht halb anlegen').length,0);
 });
 
+test('Bekannte Personen werden mit Mannschaft atomar angemeldet', async () => {
+  await api('/api/team-settings',{method:'PUT',json:{scoring_mode:'both',team_max_members:1,team_counted_results:1}});
+  const fullTeam=(await api('/api/teams',{method:'POST',json:{name:'Voll'}})).body;
+  const availableTeam=(await api('/api/teams',{method:'POST',json:{name:'Frei'}})).body;
+  await api('/api/shooters',{method:'POST',json:{first_name:'Erster',last_name:'Teilnehmer',gender:'m',start_number:1,team_id:fullTeam.id}});
+  const person=(await api('/api/people',{method:'POST',json:{first_name:'Bekannte',last_name:'Person',gender:'w'}})).body;
+
+  let result=await api(`/api/people/${person.id}/register`,{method:'POST',json:{start_number:2,team_id:fullTeam.id}});
+  assert.equal(result.response.status,409);
+  let people=(await api('/api/people?search=Bekannte')).body;
+  assert.equal(people[0].start_number,null,'fehlgeschlagene Mannschaftszuordnung darf keine Teilnahme hinterlassen');
+
+  result=await api(`/api/people/${person.id}/register`,{method:'POST',json:{start_number:2,team_id:availableTeam.id}});
+  assert.equal(result.response.status,201);
+  assert.equal(result.body.start_number,2);
+  const teams=(await api('/api/teams')).body;
+  assert.equal(teams.find(team=>team.id===availableTeam.id).members[0].shooter_id,person.id);
+});
+
 test('Saisontitel wird über die API gelesen, getrimmt und begrenzt', async () => {
   let result = await api('/api/season', { method: 'PUT', json: { title: '  Pokalschießen  ' } });
   assert.equal(result.response.status, 200);
@@ -669,7 +688,7 @@ test('Wiederanmeldung erhält Identität und historische Namen, Startnummern und
   assert.equal(fullExport(previous).shooters[0].start_number,42);
   const history=People.history(s.id).find(h=>h.id===previous);
   assert.equal(history.historical_name,'Anna Alt');assert.equal(history.placements[0].rank,1);
-  assert.throws(()=>Results.create({shooter_id:s.id,discipline_id:d.id,round_number:1,points:99}),/aktiven Event/);
+  assert.throws(()=>Results.create({shooter_id:s.id,discipline_id:d.id,round_number:1,points:99}),/aktiven Veranstaltung/);
   assert.throws(()=>Events.start({title:'Doppelt',year:2028,previous_event_id:previous}),/geändert/);
 });
 
