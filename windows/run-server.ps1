@@ -8,6 +8,11 @@ param(
   [ValidateRange(1, 65535)]
   [int]$Port = 3000,
 
+  [ValidateRange(1, 65535)]
+  [int]$HttpsPort = 3443,
+  [string]$TlsCert,
+  [string]$TlsKey,
+
   [string]$DataDirectory,
   [string]$BackupDirectory,
 
@@ -65,6 +70,9 @@ Get-ChildItem -LiteralPath $logDirectory -Filter '*.log' -File -ErrorAction Sile
 
 $env:NODE_ENV = 'production'
 $env:PORT = [string]$Port
+$env:SCHUETZEN_HTTPS_PORT = [string]$HttpsPort
+if ($TlsCert) { $env:SCHUETZEN_TLS_CERT = $TlsCert }
+if ($TlsKey) { $env:SCHUETZEN_TLS_KEY = $TlsKey }
 Set-Location -LiteralPath $AppPath
 Write-ServerLog 'Serverprozess wird gestartet.'
 

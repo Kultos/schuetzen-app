@@ -15,7 +15,7 @@ Die Einrichtung legt die Windows-Aufgabe `Schuetzen-App-Server` an. Sie startet 
 
 Das Desktop-Symbol startet ohne sichtbares Konsolenfenster, prüft die Bereitschaft der App, startet die Aufgabe bei Bedarf und öffnet anschließend `http://localhost:3000`. Mehrfaches Anklicken erzeugt keine zweite Serverinstanz. Das schwarze Serverfenster muss dabei nicht geöffnet bleiben. Startmeldungen und Fehler stehen in `data/logs/`; Protokolle älter als 30 Tage werden automatisch entfernt.
 
-Die Firewall-Regel gilt nur für private Netzwerke und Port 3000. Damit ist das öffentliche Live-Dashboard für Geräte im Veranstaltungsnetz erreichbar; die Verwaltung über unverschlüsseltes HTTP bleibt durch die App weiterhin auf den Serverrechner beschränkt. Nach dem Verschieben des App-Ordners oder einer Neuinstallation von Node.js `setup-windows.bat` erneut ausführen.
+Die Firewall-Regeln gelten nur für private Netzwerke und Geräte im lokalen Subnetz: Port 3000 für die öffentliche Ansicht, bei eingerichtetem Zertifikat zusätzlich Port 3443 für die HTTPS-Verwaltung. Die Verwaltung über unverschlüsseltes HTTP bleibt auf den Serverrechner beschränkt. Nach dem Verschieben des App-Ordners oder einer Neuinstallation von Node.js `setup-windows.bat` erneut ausführen.
 
 `remove-windows-setup.bat` entfernt Aufgabe, Desktop-Symbol und Firewall-Regel wieder. Anwendungsdaten, Archive und Backups bleiben erhalten. Der bisherige Doppelklick auf `start.bat` bleibt als sichtbarer manueller Diagnoseweg verfügbar.
 
@@ -65,17 +65,26 @@ Rechtsgrundlagen, Informationen an Betroffene und Fristen für Stamm, Ergebnisge
 
 ## LAN und HTTPS
 
+Eine [Schritt-für-Schritt-Anleitung](HTTPS-EINRICHTUNG.md) beschreibt die Zertifikatserstellung auf dem Host, die Aktivierung und die Einrichtung erster und weiterer Windows-Clients.
+
 HTTP erlaubt Verwaltung nur direkt am Server über localhost. Im LAN ist bei HTTP nur das öffentliche Dashboard verfügbar. Private API-Aufrufe benötigen eine Sitzung; Berechtigungen werden serverseitig geprüft. Sitzungen gelten acht Stunden, Kennwörter werden mit Salt und scrypt gehasht. Nach fünf fehlgeschlagenen Anmeldungen je Adresse gilt eine Wartezeit von 15 Minuten.
 
-Für Verwaltung über andere Geräte ein dort vertrauenswürdiges Zertifikat einrichten und beispielsweise in PowerShell starten:
+HTTP läuft weiterhin auf Port 3000. Liegen `server-cert.pem` und `server-key.pem` im Unterordner `tls` des Datenordners (standardmäßig `data/tls`), startet zusätzlich HTTPS auf Port 3443. Beide Zugänge verwenden dieselbe Serverinstanz und dieselben Daten. Ohne Zertifikat bleibt der bisherige reine HTTP-Betrieb erhalten. Unvollständige oder ungültige Zertifikate verhindern den Start mit einer Fehlermeldung.
+
+Nach dem Erstellen der Zertifikate `setup-windows.bat` auf dem Host erneut ausführen. Die Einrichtung prüft das Zertifikat, hinterlegt die TLS-Pfade in der Serveraufgabe, richtet die private Firewall-Freigabe ein und startet eine vorhandene Serveraufgabe neu. Bestehende Port-, Daten- und Backupeinstellungen bleiben erhalten, soweit sie nicht ausdrücklich überschrieben werden. Das Desktop-Symbol öffnet weiterhin die lokale HTTP-Verwaltung.
+
+Für abweichende Zertifikatspfade oder einen manuellen Start können in PowerShell Umgebungsvariablen gesetzt werden:
 
 ```powershell
 $env:SCHUETZEN_TLS_CERT = 'D:\Verein\tls\server-cert.pem'
 $env:SCHUETZEN_TLS_KEY = 'D:\Verein\tls\server-key.pem'
+$env:SCHUETZEN_HTTPS_PORT = '3443'
 node server.js
 ```
 
-Danach `https://SERVERNAME:3000` verwenden. Zertifikat und Name müssen übereinstimmen. TLS wird direkt von Node bereitgestellt; Proxy-Header werden nicht als sichere Verbindung akzeptiert. Firewall nur im privaten Vereinsnetz freigeben, keine Internet-Portweiterleitung. Datenordner durch Windows-Berechtigungen und Laufwerksverschlüsselung schützen. SQLite-Dateien und Downloads sind selbst nicht verschlüsselt.
+Die öffentliche Ansicht bleibt unter `http://SERVERNAME:3000/dashboard` erreichbar; für Verwaltung im LAN `https://SERVERNAME:3443/` verwenden. Zertifikat und Name beziehungsweise IP-Adresse müssen übereinstimmen. Jedes Verwaltungsgerät muss dem Aussteller vertrauen; reine HTTP-Anzeigegeräte benötigen kein Zertifikat. Unter „Saison & Netzwerk“ werden beide Adressen angezeigt.
+
+Die Windows-Einrichtung unterstützt auch `-HttpsPort`, `-TlsCert` und `-TlsKey`, beispielsweise `setup-windows.bat -HttpsPort 3444`. HTTP- und HTTPS-Port müssen verschieden sein. TLS wird direkt von Node bereitgestellt; Proxy-Header werden nicht als sichere Verbindung akzeptiert. Firewall nur im privaten Vereinsnetz freigeben, keine Internet-Portweiterleitung. Datenordner durch Windows-Berechtigungen und Laufwerksverschlüsselung schützen. SQLite-Dateien und Downloads sind selbst nicht verschlüsselt.
 
 `data/admin.json` enthält die Kennwortkonfiguration und wird durch Datenrestore nicht ersetzt. Auf einem Ersatzgerät ein neues Kennwort lokal einrichten. Bei vergessenem Kennwort kann ein berechtigter Windows-Administrator bei beendetem Server diese Datei außerhalb des Datenordners umbenennen und lokal neu einrichten.
 

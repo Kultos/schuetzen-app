@@ -3,6 +3,11 @@ param(
   [ValidateRange(1, 65535)]
   [int]$Port = 3000,
 
+  [ValidateRange(1, 65535)]
+  [int]$HttpsPort = $(if ($env:SCHUETZEN_HTTPS_PORT) { $env:SCHUETZEN_HTTPS_PORT } else { 3443 }),
+  [string]$TlsCert = $env:SCHUETZEN_TLS_CERT,
+  [string]$TlsKey = $env:SCHUETZEN_TLS_KEY,
+
   [string]$DataDirectory = $env:SCHUETZEN_DATA_DIR,
   [string]$BackupDirectory = $env:SCHUETZEN_BACKUP_DIR,
 
@@ -47,6 +52,7 @@ function Assert-InstallationPrerequisites {
   foreach ($requiredFile in @(
     (Join-Path $appPath 'server.js'),
     (Join-Path $appPath 'storage.js'),
+    (Join-Path $appPath 'transport.js'),
     $runnerPath,
     $openerPath,
     $openerWrapperPath,
@@ -75,11 +81,50 @@ function Assert-InstallationPrerequisites {
 }
 
 try {
+  # Re-running setup for HTTPS must retain existing data and backup settings.
+  $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+  $existingArguments = if ($existingTask) { ($existingTask.Actions | Select-Object -First 1).Arguments } else { '' }
+  $environmentNames = @{
+    DataDirectory = 'SCHUETZEN_DATA_DIR'
+    BackupDirectory = 'SCHUETZEN_BACKUP_DIR'
+    HttpsPort = 'SCHUETZEN_HTTPS_PORT'
+    TlsCert = 'SCHUETZEN_TLS_CERT'
+    TlsKey = 'SCHUETZEN_TLS_KEY'
+  }
+  foreach ($configurationName in @('Port', 'HttpsPort', 'DataDirectory', 'BackupDirectory', 'BackupRetentionDays', 'TlsCert', 'TlsKey')) {
+    if ($PSBoundParameters.ContainsKey($configurationName)) { continue }
+    if ($environmentNames.ContainsKey($configurationName) -and [Environment]::GetEnvironmentVariable($environmentNames[$configurationName])) { continue }
+    if ($existingArguments -match ('(?:^|\s)-' + $configurationName + '\s+(?:"([^"]*)"|(\S+))')) {
+      $configurationValue = if ($null -ne $Matches[1]) { $Matches[1] } else { $Matches[2] }
+      Set-Variable -Name $configurationName -Value $configurationValue
+    }
+  }
   $nodePath = Assert-InstallationPrerequisites
   if ($DataDirectory) { $DataDirectory = [System.IO.Path]::GetFullPath($DataDirectory) }
   if ($BackupDirectory) { $BackupDirectory = [System.IO.Path]::GetFullPath($BackupDirectory) }
+  $effectiveDataDirectory = if ($DataDirectory) { $DataDirectory } else { Join-Path $appPath 'data' }
+  if (-not $TlsCert -and -not $TlsKey) {
+    $defaultCert = Join-Path $effectiveDataDirectory 'tls\server-cert.pem'
+    $defaultKey = Join-Path $effectiveDataDirectory 'tls\server-key.pem'
+    if ((Test-Path -LiteralPath $defaultCert) -or (Test-Path -LiteralPath $defaultKey)) {
+      $TlsCert = $defaultCert
+      $TlsKey = $defaultKey
+    }
+  }
+  if ($TlsCert -or $TlsKey) {
+    if (-not $TlsCert -or -not $TlsKey) { throw 'Zertifikat und privater Schluessel muessen gemeinsam angegeben werden.' }
+    $TlsCert = [System.IO.Path]::GetFullPath($TlsCert)
+    $TlsKey = [System.IO.Path]::GetFullPath($TlsKey)
+    foreach ($tlsFile in @($TlsCert, $TlsKey)) {
+      if (-not (Test-Path -LiteralPath $tlsFile -PathType Leaf)) { throw "TLS-Datei fehlt: $tlsFile" }
+    }
+    if ($Port -eq $HttpsPort) { throw 'HTTP und HTTPS benoetigen unterschiedliche Ports.' }
+    & $nodePath -e "const fs=require('node:fs');require('node:tls').createSecureContext({cert:fs.readFileSync(process.argv[1]),key:fs.readFileSync(process.argv[2])});" $TlsCert $TlsKey
+    if ($LASTEXITCODE -ne 0) { throw 'Zertifikat und privater Schluessel sind ungueltig oder passen nicht zusammen.' }
+  }
   if ($CheckOnly) {
     Write-Host "Pruefung erfolgreich. Node.js: $nodePath"
+    if ($TlsCert) { Write-Host "HTTPS-Zertifikat geprueft. HTTPS-Port: $HttpsPort; HTTP-Port: $Port" }
     exit 0
   }
 
@@ -95,9 +140,11 @@ try {
       (Quote-Argument $PSCommandPath), (Quote-Argument $originalUser), (Quote-Argument $originalDesktop), (Quote-Argument $nodePath), $Port, $BackupRetentionDays, (Quote-Argument $resultFile)
     if ($DataDirectory) { $elevationArguments += ' -DataDirectory ' + (Quote-Argument $DataDirectory) }
     if ($BackupDirectory) { $elevationArguments += ' -BackupDirectory ' + (Quote-Argument $BackupDirectory) }
+    $elevationArguments += ' -HttpsPort ' + $HttpsPort
+    if ($TlsCert) { $elevationArguments += ' -TlsCert ' + (Quote-Argument $TlsCert) + ' -TlsKey ' + (Quote-Argument $TlsKey) }
     if ($SkipFirewall) { $elevationArguments += ' -SkipFirewall' }
     try {
-      $elevatedProcess = Start-Process -FilePath $powerShellPath -Verb RunAs -ArgumentList $elevationArguments -Wait -PassThru
+      $elevatedProcess = Start-Process -FilePath $powerShellPath -Verb RunAs -ArgumentList $elevationArguments -WindowStyle Hidden -Wait -PassThru
       if (Test-Path -LiteralPath $resultFile) {
         Get-Content -LiteralPath $resultFile | Write-Host
         Remove-Item -LiteralPath $resultFile -Force
@@ -117,6 +164,8 @@ try {
   $runnerArguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File {0} -NodePath {1} -AppPath {2} -Port {3}' -f `
     (Quote-Argument $runnerPath), (Quote-Argument $nodePath), (Quote-Argument $appPath), $Port
   $runnerArguments += ' -BackupRetentionDays ' + $BackupRetentionDays
+  $runnerArguments += ' -HttpsPort ' + $HttpsPort
+  if ($TlsCert) { $runnerArguments += ' -TlsCert ' + (Quote-Argument $TlsCert) + ' -TlsKey ' + (Quote-Argument $TlsKey) }
   if ($DataDirectory) { $runnerArguments += ' -DataDirectory ' + (Quote-Argument $DataDirectory) }
   if ($BackupDirectory) { $runnerArguments += ' -BackupDirectory ' + (Quote-Argument $BackupDirectory) }
   $action = New-ScheduledTaskAction -Execute $powerShellPath -Argument $runnerArguments
@@ -143,7 +192,6 @@ try {
   $shell = New-Object -ComObject WScript.Shell
   $shortcut = $shell.CreateShortcut($shortcutPath)
   $shortcut.TargetPath = $wscriptPath
-  $effectiveDataDirectory = if ($DataDirectory) { $DataDirectory } else { Join-Path $appPath 'data' }
   $shortcut.Arguments = '{0} -TaskName {1} -Port {2} -LogDirectory {3}' -f `
     (Quote-Argument $openerWrapperPath), (Quote-Argument $taskName), $Port, (Quote-Argument (Join-Path $effectiveDataDirectory 'logs'))
   $shortcut.WorkingDirectory = $appPath
@@ -155,15 +203,20 @@ try {
   $firewallWarning = $null
   if (-not $SkipFirewall) {
     try {
-      & $firewallPath -NodePath $nodePath -Port $Port
+      $firewallHttpsPort = if ($TlsCert) { $HttpsPort } else { 0 }
+      & $firewallPath -NodePath $nodePath -Port $Port -HttpsPort $firewallHttpsPort
     } catch {
-      $firewallWarning = 'WARNUNG: Die Firewall-Regel konnte nicht eingerichtet werden. Die App funktioniert lokal; das TV-Dashboard im LAN muss separat freigegeben werden.'
+      $firewallWarning = 'WARNUNG: Die Firewall-Regeln konnten nicht eingerichtet werden. LAN-Zugriff auf HTTP/HTTPS muss separat freigegeben werden.'
       Write-Warning $firewallWarning
     }
   }
 
+  if ($existingTask) {
+    Stop-ScheduledTask -TaskName $taskName
+  }
   Start-ScheduledTask -TaskName $taskName
   $resultMessage = "Die Schuetzen-App ist eingerichtet.`r`nDesktop-Symbol: $shortcutPath`r`nDer Server startet automatisch beim Anmelden und nach Fehlern erneut."
+  if ($TlsCert) { $resultMessage += "`r`nHTTP-Ansicht: Port $Port. HTTPS-Verwaltung: Port $HttpsPort." }
   if ($firewallWarning) { $resultMessage += "`r`n$firewallWarning" }
   Save-Result $resultMessage
   Write-Host ''

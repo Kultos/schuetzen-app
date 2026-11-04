@@ -1389,8 +1389,12 @@ async function refreshSeasonInfo() {
     ipList.appendChild(el('li', { text: 'Keine LAN-Adresse gefunden (nur lokal am Laptop erreichbar).' }));
   }
   for (const ip of info.lan_ips) {
-    const address = `${window.location.protocol}//${ip}:${info.port}/dashboard`;
+    const address = `http://${ip}:${info.port}/dashboard`;
     ipList.appendChild(el('li', {}, [el('a', { href: address, target: '_blank', text: address })]));
+    if (info.https_port) {
+      const managementAddress = `https://${ip}:${info.https_port}/`;
+      ipList.appendChild(el('li', {}, [el('a', { href: managementAddress, target: '_blank', text: `Verwaltung: ${managementAddress}` })]));
+    }
   }
   await refreshArchiveList();
   await refreshManagement();

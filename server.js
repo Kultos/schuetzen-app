@@ -1,10 +1,10 @@
 'use strict';
 
-const http = require('node:http');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
-const https = require('node:https');
+const Transport = require('./transport');
+const {DATA_DIR} = require('./storage');
 const Auth = require('./auth');
 const Backups = require('./backups');
 const { Contacts } = require('./privacy');
@@ -29,7 +29,6 @@ const {
   ARCHIVE_DIR,
 } = require('./db');
 
-const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
 const MIME = {
@@ -532,7 +531,11 @@ async function handleApi(req, res, pathname, query) {
 
   // ---- Info (IP/Port fuer LAN-Zugriff) ----
   if (pathname === '/api/info' && method === 'GET') {
-    return sendJSON(res, 200, { port: server.address()?.port || PORT, lan_ips: getLanIPs() });
+    return sendJSON(res, 200, {
+      port: server.address()?.port || listeners.port,
+      https_port: httpsServer?.address()?.port || null,
+      lan_ips: getLanIPs(),
+    });
   }
 
   return sendError(res, 404, 'Unbekannter Endpoint');
@@ -564,20 +567,23 @@ const handler = async (req, res) => {
   serveStatic(req, res, pathname);
   } catch { sendError(res,400,'Ungültige Anfrage'); }
 };
-const server = process.env.SCHUETZEN_TLS_CERT && process.env.SCHUETZEN_TLS_KEY
-  ? https.createServer({cert:fs.readFileSync(process.env.SCHUETZEN_TLS_CERT),key:fs.readFileSync(process.env.SCHUETZEN_TLS_KEY)},handler)
-  : http.createServer(handler);
+const listeners = Transport.createServers(handler, {dataDirectory: DATA_DIR});
+const {server, httpsServer} = listeners;
+const startServers = () => Transport.startServers(listeners);
 
 if (require.main === module) {
-  Backups.startTimer();
-  server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Schuetzen-Wettkampf-Server laeuft auf Port ${PORT}`);
-    const protocol=process.env.SCHUETZEN_TLS_CERT ? 'https' : 'http';
-    console.log(`Lokal:   ${protocol}://localhost:${PORT}`);
+  startServers().then(() => {
+    Backups.startTimer();
+    console.log(`Lokal:   http://localhost:${server.address().port}/`);
     for (const ip of getLanIPs()) {
-      console.log(`Im LAN:  ${protocol}://${ip}:${PORT}`);
+      console.log(`Ansicht: http://${ip}:${server.address().port}/dashboard`);
+      if (httpsServer) console.log(`Verwaltung: https://${ip}:${httpsServer.address().port}/`);
     }
+    if (!httpsServer) console.log('HTTPS ist nicht eingerichtet. Verwaltung im LAN bleibt gesperrt.');
+  }).catch(error => {
+    console.error('Serverstart fehlgeschlagen:', error.message);
+    process.exitCode = 1;
   });
 }
 
-module.exports = { server, handleApi };
+module.exports = { server, httpsServer, startServers, handleApi };
