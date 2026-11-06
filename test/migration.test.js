@@ -32,6 +32,7 @@ test('Migration erhält Bestandsdaten, erstellt ein lesbares Vorabbackup und lä
     assert.equal(exported.event.year,null,'Jahr darf nicht aus Datei- oder Exportdatum geraten werden');
     const names=fs.readdirSync(path.join(dir,'backups')).filter(n=>n.endsWith('.sqlite'));
     assert.equal(names.length,1);
+    assert.match(names[0],/-Bestehendes-Event-Jahr-offen--vor-migration-/);
     const backup=new DatabaseSync(path.join(dir,'backups',names[0]),{readOnly:true});
     assert.equal(backup.prepare('SELECT start_number FROM shooters').get().start_number,42);backup.close();
     const second=spawnSync(process.execPath,['-e',code],opts);assert.equal(second.status,0,second.stderr);

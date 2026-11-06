@@ -232,7 +232,9 @@ async function handleApi(req, res, pathname, query) {
   if(pathname==='/api/backups' && method==='GET') return sendJSON(res,200,Backups.status());
   if(pathname==='/api/backups' && method==='POST') return sendJSON(res,201,{name:Backups.create()});
   if((extra=pathname.match(/^\/api\/backups\/([^/]+)$/)) && method==='GET') {
-    res.setHeader('Content-Disposition','attachment; filename="systembackup.json"');return sendJSON(res,200,Backups.bundle(extra[1]));
+    const backup=Backups.bundle(extra[1]);
+    res.setHeader('Content-Disposition',`attachment; filename="${extra[1].slice(0,-'.sqlite'.length)}.json"`);
+    return sendJSON(res,200,backup);
   }
   if(pathname==='/api/backup/preview' && method==='POST') return sendJSON(res,200,Backups.inspect((await readBody(req)).backup));
   if(pathname==='/api/backup/restore' && method==='POST') {

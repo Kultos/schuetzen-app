@@ -164,7 +164,8 @@ function backupLabel(name) {
   if(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value))return new Date(value).toLocaleString('de-DE');
   const match=value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z-(.+)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.sqlite$/i);
   if(!match)return value;
-  const [,year,month,day,hour,minute,second,millis,reason]=match;
+  const [,year,month,day,hour,minute,second,millis,description]=match;
+  const reason=description.split('--').at(-1);
   const date=new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}.${millis}Z`);
   const reasonLabel={manuell:'Manuell',automatisch:'Automatisch','vor-eventwechsel':'Vor Veranstaltungswechsel','nach-eventwechsel':'Nach Veranstaltungswechsel','vor-korrektur':'Vor Korrektur','nach-korrektur':'Nach Korrektur','vor-restore':'Vor Wiederherstellung'}[reason]||reason;
   return `${date.toLocaleString('de-DE')} · ${reasonLabel}`;

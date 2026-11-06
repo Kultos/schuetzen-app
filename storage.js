@@ -28,19 +28,43 @@ function checkDatabase(connection) {
   if (connection.prepare('PRAGMA integrity_check').get().integrity_check !== 'ok' ||
       connection.prepare('PRAGMA foreign_key_check').all().length) throw new Error('Datenbankprüfung fehlgeschlagen');
 }
+function snapshotEventName(connection) {
+  const hasTable = connection.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?");
+  let event;
+  if (hasTable.get('events')) {
+    event = connection.prepare("SELECT title, year FROM events WHERE status='active'").get();
+  } else if (hasTable.get('settings')) {
+    event = connection.prepare("SELECT value AS title FROM settings WHERE key='event_title'").get();
+  }
+  const title = String(event?.title ?? '').normalize('NFC')
+    .replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue')
+    .replace(/Ä/g, 'Ae').replace(/Ö/g, 'Oe').replace(/Ü/g, 'Ue').replace(/ß/g, 'ss')
+    .normalize('NFD').replace(/\p{M}/gu, '')
+    .replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-/, '').slice(0, 64).replace(/-$/, '');
+  const year = Number.isInteger(event?.year) ? event.year : 'Jahr-offen';
+  return `${title || 'Ohne-Titel'}-${year}`;
+}
 function snapshot(label) {
-  const name = `${new Date().toISOString().replace(/[:.]/g, '-')}-${label}-${randomUUID()}.sqlite`;
-  const target = path.join(BACKUP_DIR, name);
-  const temporary = target + '.tmp';
+  const createdAt = new Date().toISOString();
+  const timestamp = createdAt.replace(/[:.]/g, '-');
+  const id = randomUUID();
+  const temporary = path.join(BACKUP_DIR, `${id}.sqlite.tmp`);
   // VACUUM INTO makes a consistent SQLite snapshot and omits deleted free pages.
   run('VACUUM INTO ?', [temporary]);
   const check = new DatabaseSync(temporary, { readOnly: true });
-  try { checkDatabase(check); } finally { check.close(); }
+  let eventName, schemaVersion;
+  try {
+    checkDatabase(check);
+    eventName = snapshotEventName(check);
+    schemaVersion = check.prepare('PRAGMA user_version').get().user_version;
+  } finally { check.close(); }
+  const name = `${timestamp}-${eventName}--${label}-${id}.sqlite`;
+  const target = path.join(BACKUP_DIR, name);
   const fd = fs.openSync(temporary, 'r+');
   try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
   fs.renameSync(temporary, target);
   const sha256 = createHash('sha256').update(fs.readFileSync(target)).digest('hex');
-  atomicWrite(target + '.json', JSON.stringify({ name, sha256, created_at: new Date().toISOString(), schema_version: get('PRAGMA user_version').user_version }));
+  atomicWrite(target + '.json', JSON.stringify({ name, sha256, created_at: createdAt, schema_version: schemaVersion }));
   return name;
 }
 

@@ -841,6 +841,22 @@ test('Fehlerhafte Tabellenimport-Zeilen hinterlassen keine persistenten Teilobje
   assert.equal(blank.body.errors.length,1);assert.equal(People.list('Leerwert').length,0);
 });
 
+test('Vollbackup und Download tragen Titel und Jahr der aktiven Veranstaltung sowie den Zeitstempel', async () => {
+  Events.metadata(Events.active().id, { title: 'Königsschießen / Pokal: "Finale"', year: 2031 });
+  db.prepare("INSERT INTO events(uuid,title,year,status) VALUES (?,'Historie',2032,'closed')").run(randomUUID());
+
+  const created = await api('/api/backups', { method: 'POST', json: {} });
+  assert.equal(created.response.status, 201);
+  const { name } = created.body;
+  assert.match(name, /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-Koenigsschiessen-Pokal-Finale-2031--manuell-[a-f0-9-]{36}\.sqlite$/);
+
+  const download = await api('/api/backups/' + encodeURIComponent(name));
+  assert.equal(download.response.status, 200);
+  assert.equal(download.response.headers.get('content-disposition'), `attachment; filename="${name.replace(/\.sqlite$/, '.json')}"`);
+  assert.equal(download.body.manifest.name, name);
+  assert.ok(name.startsWith(download.body.manifest.created_at.replace(/[:.]/g, '-')));
+});
+
 test('Vollrestore erhält spätere Widerrufe und sperrt andere Kontaktfreigaben bis zur erneuten Prüfung', async () => {
   const B=require('../backups'),C=require('../privacy').Contacts;
   const s=Shooters.create({name:'Widerruf',gender:'w'}),other=Shooters.create({name:'Weiterer Kontakt',gender:'m'}),remoteErase=Shooters.create({name:'Extern gelöscht',gender:'w'});
